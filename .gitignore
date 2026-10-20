@@ -1,0 +1,7 @@
+# 构建产物
+build/
+# 临时目录（用例的临时数据、崩溃转储）
+_scratch/
+# Python 缓存
+__pycache__/
+*.pyc
