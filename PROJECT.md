@@ -1,6 +1,7 @@
 # goldminer —— 独立项目
 
 本项目从 zan-lang 仓库的 `templates/game/goldminer` 导出（导出日期：2026-10-20）。
+该模板已搬出语言仓库（体量超出示例级模板位），历史版本在 `archive/goldminer-2026-10-20` 标签上；公共包（Game.Kit / Game.Foundation.Gui / Gui）仍由 zan-lang 仓库提供。
 语言仓库只放 SDK、公共包与**示例级**模板；产品级游戏在这里自己演进。
 
 ## 目录
