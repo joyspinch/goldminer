@@ -38,3 +38,8 @@ Copy-Item -Recurse <zan-lang>/packages/<Name> packages/<Name>
 ```powershell
 pwsh -File client/tools/test.ps1     # 客户端用例
 ```
+
+三段全绿才算过：`goldminer_test_OK`（玩法断言用例，纯逻辑）、
+`goldminer_SAVE_OK runs=1 -> runs=2`（存档两遍，新进程读回上一遍的档）、
+`goldminer_SMOKE_OK`（无头冒烟）。用例源码在 `client/tests/goldminer_test.zan`，
+`build.ps1` 会把它编成 `build/goldminer/tests/goldminer_test.exe`。

@@ -11,7 +11,9 @@ param(
     [string]$Output = '',
     [string]$PackageProject = '',
     # 透传给 zanc 的额外参数（如 --publish --target android-arm64 ...）
-    [string[]]$ZancArgs = @()
+    [string[]]$ZancArgs = @(),
+    # 是否顺带编译玩法断言用例（client/tests/*.zan → <Output>/tests/*.exe）
+    [bool]$BuildTests = $true
 )
 $ErrorActionPreference = 'Stop'
 $project = Split-Path -Parent $PSScriptRoot
@@ -43,3 +45,24 @@ if ($LASTEXITCODE -ne 0) { throw "zanc failed ($LASTEXITCODE)" }
 $assets = Join-Path $project 'assets'
 if (Test-Path $assets) { Copy-Item $assets $Output -Recurse -Force }
 Write-Host "Built $exe"
+
+# --- 玩法断言用例：单独编一个测试 exe ---
+# 用例只吃纯逻辑核心（World + Entities）：MinerApp/Scenes 带游戏的 Main 与窗口
+# 依赖，用例自己的 Main 才是入口，所以排除掉。
+# 测试 exe 放在 <Output>/tests/ 下：存档路径 Data.SavePath() = exe 同级目录，
+# 用例的存档落在自己目录里，不碰玩家存档（build/goldminer/goldminer_save.txt）。
+if ($BuildTests) {
+    $testDir = Join-Path $Output 'tests'
+    New-Item -ItemType Directory -Force -Path $testDir | Out-Null
+    $coreSources = @(Get-ChildItem (Join-Path $project 'src') -Recurse -File -Filter *.zan |
+        Where-Object { $_.Name -ne 'MinerApp.zan' -and $_.FullName -notmatch '[\\/]Scenes[\\/]' } |
+        Sort-Object FullName | ForEach-Object { $_.FullName })
+    $testExe = Join-Path $testDir 'goldminer_test.exe'
+    $tzargs = @((Join-Path $project 'tests/goldminer_test.zan')) + $coreSources +
+        @('--auto-stdlib', '--package-project', $PackageProject)
+    if ($Stdlib) { $tzargs += @('--stdlib-path', $Stdlib) }
+    $tzargs += @('-o', $testExe)
+    & $Compiler @tzargs
+    if ($LASTEXITCODE -ne 0) { throw "zanc failed (用例 exe, $LASTEXITCODE)" }
+    Write-Host "Built $testExe"
+}

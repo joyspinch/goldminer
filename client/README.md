@@ -81,5 +81,25 @@ IDE「新建项目」复制本模板后 assets/ 与 src/ 同级，同样自动�
 - src/main.zan    入口 + 场景渲染/输入/兜底 HUD/无头自测
                   （MINER_SIM=1 平衡仿真，不建窗口）
 - src/World.zan    核心玩法：摆钩、抓取、物品表、连击/QTE/炸弹、关卡与存档
+- tests/goldminer_test.zan  玩法断言用例（纯逻辑，不建窗口/不开音频）
 - zan.proj        IDE 项目文件（IDE「新建项目 → 游戏」可直接套用）
 - template.manifest 模板清单（IDE 新建项目对话框展示）
+
+测试
+----
+```powershell
+pwsh -File client/tools/test.ps1
+```
+
+三段全绿才算过：
+
+- `goldminer_test_OK` —— 玩法断言用例：摆钩限位、放钩速度、抓取判定半径、
+  重量→收线 QTE、连击倍率与超时、神秘袋开袋表、炸弹拆弹、TNT 连锁、炸药
+  道具、关卡时间与推进、得分与结算、存档往返（用例 exe 跑在
+  `build/goldminer/tests/` 下，存档落在自己目录，不碰玩家存档）；
+- `goldminer_SAVE_OK runs=1 -> runs=2` —— 存档两遍：第二遍是新进程，读回
+  第一遍写的档；
+- `goldminer_SMOKE_OK` —— 无头冒烟：UiDriver 跑几帧后自行退出。
+
+`build.ps1` 会把用例编成 `build/goldminer/tests/goldminer_test.exe`
+（`-BuildTests:$false` 可跳过）。

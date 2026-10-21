@@ -66,6 +66,7 @@ public class World {
     // 存档
     public int bestLevel = 0;
     public int bestGold = 0;
+    public int runs = 0;  // 累计落盘次数（每次存档 +1）
 
     public static long NowMs() {
         return Window.GetTickMs();
@@ -642,9 +643,11 @@ public class World {
     // ------------------ 存档 ------------------
     public void Save() {
         List<string> lines = new List<string>();
+        this.runs = this.runs + 1;  // 每次落盘 +1：存档往返可验证
         lines.Add("bestLevel=" + this.bestLevel);
         lines.Add("bestGold=" + this.bestGold);
         lines.Add("totalGold=" + this.totalGold);
+        lines.Add("runs=" + this.runs);
         lines.Add("level=" + this.level);
         File.WriteAllLines(Data.SavePath(), lines);
     }
@@ -662,6 +665,7 @@ public class World {
             if (k == "bestLevel") { this.bestLevel = Data.ParseIntS(v); }
             else if (k == "bestGold") { this.bestGold = Data.ParseIntS(v); }
             else if (k == "totalGold") { this.totalGold = Data.ParseIntS(v); }
+            else if (k == "runs") { this.runs = Data.ParseIntS(v); }
         }
     }
 }

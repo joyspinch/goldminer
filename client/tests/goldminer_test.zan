@@ -1,0 +1,782 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using Gui;
+using Game.Kit;
+
+// 黄金矿工 玩法断言用例（无头、纯逻辑）：不建窗口、不开音频设备。
+//
+// 判据：每条断言咬住 World / ItemDef 里**真实存在**的玩法规则——摆钩与限位、
+// 放钩速度、抓取判定半径、重量→收线 QTE、连击倍率与超时、神秘袋开袋表、
+// 炸弹拆弹、TNT 连锁、炸药道具、关卡时间与推进、得分与结算、存档往返。
+// 全部通过则打印：
+//   goldminer_test checks=N failures=0
+//   goldminer_test OK
+//
+// 附带一个存档往返模式（`goldminer_test.exe save`）：第一遍写档（局数 1），
+// 第二遍是新进程，必须读回上一遍写的档（局数 2）——tools/test.ps1 的
+// goldminer_SAVE_OK 段用它。用例 exe 跑在 build/goldminer/tests/ 下，
+// 存档落在自己目录里，不碰玩家的存档。
+public class GoldMinerTest {
+    static int checks = 0;
+    static int failures = 0;
+
+    // ------------------ 极小断言框架 ------------------
+    static void Ok(bool cond, string label) {
+        checks = checks + 1;
+        if (!cond) {
+            failures = failures + 1;
+            Console.WriteLine("FAIL #" + Convert.ToString(checks) + " " + label);
+        }
+    }
+
+    static void Eq(int got, int want, string label) {
+        Ok(got == want, label + " got=" + Convert.ToString(got)
+            + " want=" + Convert.ToString(want));
+    }
+
+    // 浮点比较：放大 1000 倍取整，避开 0.1 的二进制表示误差
+    static void EqD(double got, double want, string label) {
+        Ok((int)(got * 1000.0 + 0.5) == (int)(want * 1000.0 + 0.5),
+           label + " got=" + Convert.ToString((int)(got * 1000.0))
+            + " want=" + Convert.ToString((int)(want * 1000.0)));
+    }
+
+    static void EqS(string got, string want, string label) {
+        Ok(got == want, label + " got=" + got + " want=" + want);
+    }
+
+    // ------------------ 场景工具 ------------------
+    // 造一个干净的世界：固定种子、开好第一关、清空物品场（用例自己摆道具）。
+    static World NewWorld(long seed) {
+        World w = NewPopulated(seed);
+        w.items.Clear();
+        w.parts.Clear();
+        w.texts.Clear();
+        return w;
+    }
+
+    // 保留布场结果的世界（布场用例用：要看真实铺出来的物品场）
+    static World NewPopulated(long seed) {
+        World w = new World();
+        w.rng = Rng.Seed(seed);
+        w.NewRun(w.rng);
+        return w;
+    }
+
+    // 指定关卡的世界（关卡影响目标曲线、摆速、拆弹次数与时限）。
+    static World NewWorldAt(long seed, int level) {
+        World w = new World();
+        w.rng = Rng.Seed(seed);
+        w.NewRun(w.rng);
+        w.level = level;
+        w.StartLevel();
+        w.items.Clear();
+        w.parts.Clear();
+        w.texts.Clear();
+        return w;
+    }
+
+    // 摆一件道具到指定坐标
+    static Item Place(World w, int kind, int x, int y) {
+        Item it = Item.Make(kind, x, y);
+        w.items.Add(it);
+        return it;
+    }
+
+    // 放钩并推进到「这一钩有结果」为止（钩住 / 炸了 / 落空撞底都算）。
+    // 返回打出这一钩之后的状态。
+    static int ThrowOnce(World w, int maxSteps) {
+        w.Action();                       // ST_SWING → ST_EXTEND
+        for (int i = 0; i < maxSteps; i = i + 1) {
+            w.Step(16);
+            if (w.state != World.ST_EXTEND) { return w.state; }
+        }
+        return w.state;
+    }
+
+    // 收线到落定（钩上物入账 → ST_SWING；炸弹 → ST_BOMB；达标/超时 → ST_RESULT）
+    static int Land(World w, int maxSteps) {
+        for (int i = 0; i < maxSteps; i = i + 1) {
+            if (w.state == World.ST_SWING || w.state == World.ST_BOMB
+                || w.state == World.ST_RESULT) {
+                return w.state;
+            }
+            w.Step(16);
+        }
+        return w.state;
+    }
+
+    static int CountKind(World w, int kind) {
+        int n = 0;
+        for (int i = 0; i < w.items.Count; i = i + 1) {
+            if (w.items[i].kind == kind && w.items[i].alive) { n = n + 1; }
+        }
+        return n;
+    }
+
+    static bool HasLine(List<string> lines, string want) {
+        for (int i = 0; i < lines.Count; i = i + 1) {
+            if (lines[i] == want) { return true; }
+        }
+        return false;
+    }
+
+    // 神秘袋开袋表：roll<42 小金块 / <68 金块 / <82 钻石 / <92 金币袋 /
+    // <97 大金块 / 否则炸弹。roll 是 rng.Range(0,100) 的返回值。
+    static int BagKindOf(int roll) {
+        if (roll < 42) { return 0; }
+        if (roll < 68) { return 1; }
+        if (roll < 82) { return 3; }
+        if (roll < 92) { return 10; }
+        if (roll < 97) { return 2; }
+        return 9;
+    }
+
+    // ------------------ 1. 物品表（分值 / 重量 / 半径 / 垃圾标记） ------------------
+    static void TestItemDefs() {
+        Eq(ItemDef.KIND_COUNT, 11, "物品种类数");
+        Eq(Data.DEFS.Length, 11, "物品表长度");
+        EqS(Data.DEFS[0].name, "小金块", "kind0 名字");
+        Eq(Data.DEFS[0].score, 50, "小金块分值 50");
+        Eq(Data.DEFS[0].weight, 5, "小金块重量 5");
+        Eq(Data.DEFS[0].rad, 24, "小金块半径 24");
+        Eq(Data.DEFS[1].score, 150, "金块分值 150");
+        Eq(Data.DEFS[1].weight, 9, "金块重量 9");
+        Eq(Data.DEFS[2].score, 400, "大金块分值 400");
+        Eq(Data.DEFS[2].weight, 15, "大金块重量 15");
+        Eq(Data.DEFS[3].score, 600, "钻石分值 600");
+        Eq(Data.DEFS[3].weight, 6, "钻石重量 6");
+        Eq(Data.DEFS[4].score, 350, "宝箱分值 350");
+        Eq(Data.DEFS[4].weight, 12, "宝箱重量 12");
+        Eq(Data.DEFS[5].score, 0, "神秘袋本身 0 分");
+        Eq(Data.DEFS[5].weight, 10, "神秘袋重量 10");
+        Eq(Data.DEFS[6].score, 20, "石头分值 20");
+        Eq(Data.DEFS[6].weight, 16, "石头重量 16（最重）");
+        Ok(Data.DEFS[6].junk, "石头是垃圾（清连击）");
+        Eq(Data.DEFS[7].score, 15, "骷髅分值 15");
+        Ok(Data.DEFS[7].junk, "骷髅是垃圾（清连击）");
+        Eq(Data.DEFS[8].score, 0, "TNT 0 分");
+        Eq(Data.DEFS[9].score, 0, "炸弹 0 分");
+        Eq(Data.DEFS[10].score, 120, "金币袋分值 120");
+        Eq(Data.DEFS[10].weight, 3, "金币袋重量 3（最轻）");
+
+        // 价值序：钻石 > 大金块 > 宝箱 > 金块 > 金币袋 > 小金块 > 石头 > 骷髅
+        Ok(Data.DEFS[3].score > Data.DEFS[2].score, "钻石比大金块值钱");
+        Ok(Data.DEFS[2].score > Data.DEFS[4].score, "大金块比宝箱值钱");
+        Ok(Data.DEFS[4].score > Data.DEFS[1].score, "宝箱比金块值钱");
+        Ok(Data.DEFS[1].score > Data.DEFS[10].score, "金块比金币袋值钱");
+        Ok(Data.DEFS[10].score > Data.DEFS[0].score, "金币袋比小金块值钱");
+        Ok(Data.DEFS[0].score > Data.DEFS[6].score, "小金块比石头值钱");
+        Ok(Data.DEFS[6].score > Data.DEFS[7].score, "石头比骷髅值钱");
+        // 重量序：石头最重、金币袋最轻
+        Ok(Data.DEFS[6].weight > Data.DEFS[2].weight, "石头比大金块重");
+        Ok(Data.DEFS[2].weight > Data.DEFS[1].weight, "大金块比金块重");
+        Ok(Data.DEFS[10].weight < Data.DEFS[0].weight, "金币袋比小金块轻");
+        // 只有石头和骷髅是垃圾
+        int junkCount = 0;
+        for (int i = 0; i < Data.DEFS.Length; i = i + 1) {
+            if (Data.DEFS[i].junk) { junkCount = junkCount + 1; }
+        }
+        Eq(junkCount, 2, "只有石头和骷髅是垃圾");
+    }
+
+    // ------------------ 2. 目标曲线与关卡时长 ------------------
+    static void TestTargetCurve() {
+        World w = NewWorld(1);
+        Eq(w.Target(), 520, "L1 目标 520");
+        w.level = 2; Eq(w.Target(), 786, "L2 目标 786");
+        w.level = 3; Eq(w.Target(), 1106, "L3 目标 1106");
+        w.level = 4; Eq(w.Target(), 1495, "L4 目标 1495");
+        w.level = 5; Eq(w.Target(), 1978, "L5 目标 1978");
+        w.level = 8; Eq(w.Target(), 4330, "L8 目标 4330");
+        // 逐关递增
+        int prev = 0;
+        bool rising = true;
+        for (int lv = 1; lv <= 10; lv = lv + 1) {
+            w.level = lv;
+            int t = w.Target();
+            if (t <= prev) { rising = false; }
+            prev = t;
+        }
+        Ok(rising, "目标金额逐关递增");
+        Eq(w.LevelTimeMs(), 60000, "每关 60 秒");
+    }
+
+    // ------------------ 3. 开局状态 ------------------
+    static void TestStartState() {
+        World w = NewPopulated(424242);
+        Eq(w.level, 1, "开局第 1 关");
+        Eq(w.gold, 0, "开局本关 0 金");
+        Eq(w.totalGold, 0, "开局累计 0 金");
+        Eq(w.dynamites, 1, "开局 1 个炸药");
+        Eq(w.state, World.ST_SWING, "开局摆钩中");
+        Eq(w.timeLeftMs, 60000, "开局 60 秒");
+        Eq(w.hookedKind, -1, "开局没钩住东西");
+        Eq(w.levelResult, 0, "开局没有结算");
+        Eq(w.combo.count, 0, "开局无连击");
+        Eq(w.items.Count, 14, "开局场上 14 件（固定种子 424242）");
+        // 摆速逐关加快、封顶 122
+        w.level = 5; w.StartLevel();
+        Eq((int)w.angDir, 80, "L5 摆速 60+5*4=80");
+        w.level = 20; w.StartLevel();
+        Eq((int)w.angDir, 122, "摆速封顶 122");
+        Eq((int)w.angle, 90, "开局摆角 90（垂直向下）");
+        Eq((int)w.clawLen, 110, "开局绳长 110");
+        Eq(w.gold, 0, "重开一关金币清零");
+        Eq(w.timeLeftMs, 60000, "重开一关时间重置");
+        Eq(w.state, World.ST_SWING, "重开一关回到摆钩");
+    }
+
+    // ------------------ 4. 摆钩（限位与反弹） ------------------
+    static void TestSwing() {
+        World w = NewWorld(1);
+        w.angle = 90; w.angDir = 60;
+        w.Step(100);
+        Eq((int)w.angle, 96, "摆 100ms 走 6 度（60 度/秒）");
+        // 撞上界 155 反弹
+        w.angle = 154; w.angDir = 60;
+        w.Step(100);
+        Eq((int)w.angle, 155, "摆角上界 155");
+        Ok(w.angDir < 0, "撞上界反向摆");
+        // 撞下界 25 反弹
+        w.angle = 26; w.angDir = -60;
+        w.Step(100);
+        Eq((int)w.angle, 25, "摆角下界 25");
+        Ok(w.angDir > 0, "撞下界反向摆");
+        // 摆钩时绳长恒定 110（不伸不收）
+        w.clawLen = 300;
+        w.Step(16);
+        Eq((int)w.clawLen, 110, "摆钩时绳长回到 110");
+    }
+
+    // ------------------ 5. 放钩（伸出速度） ------------------
+    static void TestThrow() {
+        World w = NewWorld(1);
+        w.Action();
+        Eq(w.state, World.ST_EXTEND, "放钩进入伸出态");
+        Eq((int)w.clawV, 572, "L1 伸出速度 560+12");
+        w.Action();
+        Eq(w.state, World.ST_EXTEND, "伸出中再按不重复放钩");
+        World w2 = NewWorldAt(1, 20);
+        w2.Action();
+        Eq((int)w2.clawV, 780, "伸出速度封顶 780");
+    }
+
+    // ------------------ 6. 抓取判定（只在落点命中） ------------------
+    static void TestGrab() {
+        // 正下方命中
+        World w = NewWorld(1);
+        Item it = Place(w, 0, Data.HOOK_X, 400);
+        int st = ThrowOnce(w, 400);
+        Eq(w.hookedKind, 0, "钩到小金块");
+        Eq(st, World.ST_RETRACT, "钩到后转收线");
+        Ok(!it.alive, "钩走的物品标记为已取走");
+        // 偏离落点不命中
+        World w2 = NewWorld(1);
+        Place(w2, 0, Data.HOOK_X + 120, 400);
+        ThrowOnce(w2, 400);
+        Eq(w2.hookedKind, -1, "落点外 120px 不抓取");
+        Eq(w2.gold, 0, "落空不入账");
+        // 判定半径 = 物品半径 + 14：小金块 24+14=38
+        World w3 = NewWorld(1);
+        Place(w3, 0, Data.HOOK_X + 37, 400);
+        ThrowOnce(w3, 400);
+        Eq(w3.hookedKind, 0, "落点 37px（半径内）命中");
+        World w4 = NewWorld(1);
+        Place(w4, 0, Data.HOOK_X + 39, 400);
+        ThrowOnce(w4, 400);
+        Eq(w4.hookedKind, -1, "落点 39px（半径外）不命中");
+        // 大物品判定半径更大：钻石 26+14=40
+        World w5 = NewWorld(1);
+        Place(w5, 3, Data.HOOK_X + 39, 400);
+        ThrowOnce(w5, 400);
+        Eq(w5.hookedKind, 3, "钻石 39px（半径 40 内）命中");
+    }
+
+    // ------------------ 7. 重量 → 收线 QTE ------------------
+    static void TestWeightQte() {
+        // 轻物（重量 < 9）不进 QTE
+        World w = NewWorld(1);
+        Place(w, 0, Data.HOOK_X, 400);          // 小金块 重量 5
+        int st = ThrowOnce(w, 400);
+        Eq(st, World.ST_RETRACT, "轻物直接收线，不进 QTE");
+        // 金块 重量 9 → need = 1 + 9/6 = 2
+        World w2 = NewWorld(1);
+        Place(w2, 1, Data.HOOK_X, 400);
+        Eq(ThrowOnce(w2, 400), World.ST_QTE, "金块进入收线 QTE");
+        Eq(w2.qte.need, 2, "金块 QTE 需要 2 次命中");
+        Eq(w2.qte.done, 0, "QTE 命中计数从 0 起");
+        // 大金块 重量 15 → need 3
+        World w3 = NewWorld(1);
+        Place(w3, 2, Data.HOOK_X, 400);
+        Eq(ThrowOnce(w3, 400), World.ST_QTE, "大金块进入收线 QTE");
+        Eq(w3.qte.need, 3, "大金块 QTE 需要 3 次命中");
+        // 宝箱 重量 12 → need 3
+        World w4 = NewWorld(1);
+        Place(w4, 4, Data.HOOK_X, 400);
+        ThrowOnce(w4, 400);
+        Eq(w4.qte.need, 3, "宝箱 QTE 需要 3 次命中");
+        // 石头 重量 16 → need 3
+        World w5 = NewWorld(1);
+        Place(w5, 6, Data.HOOK_X, 400);
+        ThrowOnce(w5, 400);
+        Eq(w5.qte.need, 3, "石头 QTE 需要 3 次命中");
+        // 炸弹不进 QTE（走拆弹 QTE）
+        World w6 = NewWorld(1);
+        Place(w6, 9, Data.HOOK_X, 400);
+        Eq(ThrowOnce(w6, 400), World.ST_RETRACT, "炸弹不进收线 QTE");
+    }
+
+    // ------------------ 8. QTE 判定窗口 ------------------
+    static void TestQteWindow() {
+        World w = NewWorld(1);
+        Place(w, 2, Data.HOOK_X, 400);          // 大金块 → need 3
+        ThrowOnce(w, 400);
+        Eq(w.state, World.ST_QTE, "进入 QTE");
+        // 窗口外按 = 漏按
+        w.qte.radius = 33.0;
+        w.Action();
+        Eq(w.qte.done, 0, "窗口外(33)按不算命中");
+        Eq(w.qte.miss, 1, "窗口外按记一次漏按");
+        Eq(w.state, World.ST_QTE, "漏按后还在 QTE");
+        // 窗口下界 34 命中
+        w.qte.radius = 34.0;
+        w.Action();
+        Eq(w.qte.done, 1, "窗口下界 34 命中");
+        Eq(w.qteBoost, 900, "命中给 900ms 加速");
+        Eq((int)w.qte.radius, 96, "命中后圈复位到起始半径");
+        // 窗口上界 54 命中
+        w.qte.radius = 54.0;
+        w.Action();
+        Eq(w.qte.done, 2, "窗口上界 54 命中");
+        // 55 漏按
+        w.qte.radius = 55.0;
+        w.Action();
+        Eq(w.qte.done, 2, "窗口上界外(55)不命中");
+        Eq(w.qte.miss, 2, "第二次漏按计数");
+        // 第三次命中 → QTE 完成 → 转收线
+        w.qte.radius = 40.0;
+        w.Action();
+        Eq(w.qte.done, 3, "第三次命中");
+        Eq(w.state, World.ST_RETRACT, "QTE 完成后转收线");
+    }
+
+    // ------------------ 9. 得分 / 连击 ------------------
+    static void TestScoreAndCombo() {
+        // 首个有价物：分值 × 1.1
+        World w = NewWorld(1);
+        Place(w, 0, Data.HOOK_X, 400);
+        ThrowOnce(w, 400);
+        Land(w, 600);
+        Eq(w.gold, 55, "首个有价物 50 × 1.1 = 55");
+        Eq(w.combo.count, 1, "连击 1");
+        // 第二个有价物：倍率 1.2
+        Place(w, 0, Data.HOOK_X, 500);
+        ThrowOnce(w, 400);
+        Land(w, 600);
+        Eq(w.combo.count, 2, "连击 2");
+        Eq(w.gold, 55 + 60, "两连击 = 55 + 60");
+        // 垃圾清连击，但仍照分值入账
+        Place(w, 6, Data.HOOK_X, 450);           // 石头（junk）
+        ThrowOnce(w, 400);
+        Land(w, 600);
+        Eq(w.combo.count, 0, "抓到垃圾清连击");
+        Eq(w.gold, 115 + 20, "垃圾照分值入账（石头 20，不吃倍率）");
+        // 垃圾之后再捡 → 连击从 1 重新开始
+        Place(w, 0, Data.HOOK_X, 500);
+        ThrowOnce(w, 400);
+        Land(w, 600);
+        Eq(w.combo.count, 1, "垃圾后连击重新计数");
+        // 宝箱 350 × 1.1 = 385
+        World w2 = NewWorld(1);
+        Place(w2, 4, Data.HOOK_X, 400);
+        ThrowOnce(w2, 400);
+        Land(w2, 600);
+        Eq(w2.gold, 385, "宝箱 350 × 1.1 = 385");
+    }
+
+    // ------------------ 10. 连击表（倍率 / 封顶 / 超时 / FEVER） ------------------
+    static void TestComboTable() {
+        World w = NewWorld(1);
+        ComboMeter m = w.combo;
+        m.Reset();
+        m.Hit(1000);
+        Eq(m.count, 1, "命中 1 次");
+        EqD(m.multiplier, 1.1, "1 连击倍率 1.1");
+        m.Hit(1100);
+        EqD(m.multiplier, 1.2, "2 连击倍率 1.2");
+        m.Hit(1200);
+        Ok(m.IsFever(), "3 连击进 FEVER");
+        Eq(m.GlowTarget(), 200, "FEVER 表现强度 200");
+        for (int i = 0; i < 9; i = i + 1) { m.Hit(1300); }
+        Eq(m.count, 12, "12 连击");
+        EqD(m.multiplier, 2.0, "倍率封顶 2.0");
+        // 超时清零：窗口 3.2 秒
+        Ok(!m.Expire(1300 + 3200), "3.2 秒内不清零");
+        Ok(m.Expire(1300 + 3201), "超过 3.2 秒清零");
+        Eq(m.count, 0, "超时后连击归零");
+        EqD(m.multiplier, 1.0, "超时后倍率回 1.0");
+        // 主动中断（炸药 / TNT / 垃圾）
+        m.Reset();
+        m.Hit(1000);
+        m.Break();
+        Eq(m.count, 0, "Break 主动清连击");
+        EqD(m.multiplier, 1.0, "Break 后倍率回 1.0");
+    }
+
+    // ------------------ 11. 神秘袋开袋表 ------------------
+    static void TestMysteryBag() {
+        // 开袋表的 6 个分支都要被走到：roll<42 小金块 / <68 金块 / <82 钻石 /
+        // <92 金币袋 / <97 大金块 / 否则炸弹。
+        // 用 L5：目标 1978 远高于袋里最贵的钻石（600），开袋不会提前过关，
+        // 断言的就是"开出什么 → 入账多少"这条规则本身。
+        bool[] seen = new bool[6];
+        for (long seed = 1; seed <= 240; seed = seed + 1) {
+            World w = NewWorldAt(seed, 5);
+            Place(w, 5, Data.HOOK_X, 400);        // 神秘袋
+            ThrowOnce(w, 400);
+            // 开袋前的 rng 状态快照：收线过程不用 rng，落地那一刻才摇袋子
+            Rng probe = new Rng();
+            probe.state = w.rng.state;
+            int roll = probe.Range(0, 100);
+            int want = BagKindOf(roll);
+            int st = Land(w, 800);
+            if (want == 9) {
+                // 欧皇变非酋：开出炸弹 → 拆弹 QTE
+                Eq(st, World.ST_BOMB, "神秘袋开出炸弹进拆弹 QTE（roll=" + Convert.ToString(roll) + "）");
+                Eq(w.bombNeed, 15, "袋里炸弹的拆弹次数按关卡算");
+                Eq(w.bombTimeLeft, 2400, "袋里炸弹时限 2400");
+                seen[5] = true;
+            } else {
+                Eq(st, World.ST_SWING, "神秘袋开出物品正常落定（roll=" + Convert.ToString(roll) + "）");
+                int wantGold = (int)(Data.DEFS[want].score * w.combo.multiplier);
+                Eq(w.gold, wantGold, "袋里物品按分值入账 roll=" + Convert.ToString(roll));
+                if (want == 0) { seen[0] = true; }
+                if (want == 1) { seen[1] = true; }
+                if (want == 3) { seen[2] = true; }
+                if (want == 10) { seen[3] = true; }
+                if (want == 2) { seen[4] = true; }
+            }
+        }
+        Ok(seen[0], "开袋表走到小金块分支");
+        Ok(seen[1], "开袋表走到金块分支");
+        Ok(seen[2], "开袋表走到钻石分支");
+        Ok(seen[3], "开袋表走到金币袋分支");
+        Ok(seen[4], "开袋表走到大金块分支");
+        Ok(seen[5], "开袋表走到炸弹分支");
+    }
+
+    // ------------------ 12. 炸弹拆弹 QTE ------------------
+    static void TestBomb() {
+        World w = NewWorld(5);
+        Place(w, 9, Data.HOOK_X, 400);
+        ThrowOnce(w, 400);
+        int st = Land(w, 800);
+        Eq(st, World.ST_BOMB, "炸弹进拆弹 QTE");
+        Eq(w.bombClicks, 0, "拆弹点击从 0 起");
+        Eq(w.bombNeed, 11, "L1 拆弹需要 11 次点击");
+        Eq(w.bombTimeLeft, 2540, "L1 拆弹时限 2600-60");
+        for (int i = 0; i < 11; i = i + 1) { w.Action(); }
+        Eq(w.state, World.ST_RETRACT, "拆完转收线");
+        Eq(w.hookedKind, -1, "拆完不再挂着炸弹");
+        Eq(w.gold, 80, "拆除成功 +80");
+        // 拆弹失败：倒计时归零 → 炸自己 -100（金币不为负）
+        World w2 = NewWorld(5);
+        Place(w2, 9, Data.HOOK_X, 400);
+        ThrowOnce(w2, 400);
+        Land(w2, 800);
+        w2.Step(w2.bombTimeLeft + 16);
+        Eq(w2.state, World.ST_RETRACT, "拆弹超时转收线");
+        Eq(w2.gold, 0, "拆弹失败扣 100，金币不为负");
+        Eq(w2.boomSeq, 1, "拆弹失败记一次爆炸事件");
+        // 拆弹次数与时限随关卡变化
+        World w3 = NewWorldAt(23, 20);
+        Place(w3, 9, Data.HOOK_X, 400);
+        ThrowOnce(w3, 400);
+        Land(w3, 800);
+        Eq(w3.bombNeed, 30, "L20 拆弹需要 30 次点击");
+        Eq(w3.bombTimeLeft, 1600, "拆弹时限下限 1600");
+    }
+
+    // ------------------ 13. TNT 连锁 ------------------
+    static void TestTnt() {
+        World w = NewWorld(3);
+        Item tnt = Place(w, 8, Data.HOOK_X, 400);
+        Item near = Place(w, 3, Data.HOOK_X + 100, 430);   // 距爆点 ~105 < 150
+        Item far = Place(w, 3, Data.HOOK_X + 260, 500);    // 距爆点 ~278 > 150
+        int st = ThrowOnce(w, 400);
+        Eq(st, World.ST_RETRACT, "TNT 抓到后空爪收回");
+        Eq(w.hookedKind, -1, "TNT 不入账");
+        Ok(!tnt.alive, "TNT 被引爆");
+        Ok(!near.alive, "爆炸半径内物品被炸毁");
+        Ok(far.alive, "爆炸半径外物品存活");
+        Eq(w.gold, 0, "TNT 爆炸没有收益");
+        Eq(w.boomSeq, 1, "TNT 记一次爆炸事件");
+        Ok(w.shakeFrames > 0, "TNT 爆炸震屏");
+        // 连锁：半径内的另一颗 TNT 一起炸
+        World w2 = NewWorld(3);
+        Item t1 = Place(w2, 8, Data.HOOK_X, 400);
+        Item t2 = Place(w2, 8, Data.HOOK_X + 100, 400);     // 距爆点 100 < 150
+        Item keep = Place(w2, 3, Data.HOOK_X + 300, 400);  // 距爆点 300 > 150
+        ThrowOnce(w2, 400);
+        Ok(!t1.alive, "第一颗 TNT 被引爆");
+        Ok(!t2.alive, "半径内的 TNT 连锁引爆");
+        Ok(keep.alive, "半径外的物品不受连锁影响");
+        Eq(w2.boomSeq, 2, "连锁记两次爆炸事件");
+        // TNT 清连击
+        World w3 = NewWorld(3);
+        Place(w3, 0, Data.HOOK_X, 400);
+        ThrowOnce(w3, 400);
+        Land(w3, 600);
+        Eq(w3.combo.count, 1, "先攒 1 连击");
+        Place(w3, 8, Data.HOOK_X, 500);
+        ThrowOnce(w3, 400);
+        Eq(w3.combo.count, 0, "TNT 爆炸清连击");
+    }
+
+    // ------------------ 14. 炸药道具 ------------------
+    static void TestDynamite() {
+        World w = NewWorld(11);
+        Ok(!w.UseDynamite(), "摆钩状态用不了炸药");
+        Place(w, 2, Data.HOOK_X, 400);          // 大金块 → QTE
+        ThrowOnce(w, 400);
+        Eq(w.state, World.ST_QTE, "重物在 QTE");
+        Ok(w.UseDynamite(), "QTE 中可以用炸药");
+        Eq(w.dynamites, 0, "炸药 -1");
+        Eq(w.hookedKind, -1, "炸掉钩上物");
+        Eq(w.state, World.ST_RETRACT, "炸完转收线");
+        Eq(w.gold, 0, "炸掉的东西不入账");
+        Ok(!w.UseDynamite(), "炸药用完不能再用");
+        // 空爪不能炸
+        World w2 = NewWorld(11);
+        Ok(!w2.UseDynamite(), "没钩住东西用不了炸药");
+        // 炸药清连击
+        World w3 = NewWorld(11);
+        Place(w3, 0, Data.HOOK_X, 400);
+        ThrowOnce(w3, 400);
+        Land(w3, 600);
+        Eq(w3.combo.count, 1, "先攒 1 连击");
+        Place(w3, 2, Data.HOOK_X, 500);
+        ThrowOnce(w3, 400);
+        Eq(w3.state, World.ST_QTE, "第二个重物在 QTE");
+        w3.UseDynamite();
+        Eq(w3.combo.count, 0, "用炸药清连击");
+    }
+
+    // ------------------ 15. 关卡时间与推进 ------------------
+    static void TestLevelFlow() {
+        World w = NewWorld(13);
+        int t0 = w.timeLeftMs;
+        w.Step(500);
+        Eq(w.timeLeftMs, t0 - 500, "时间随帧推进");
+        // 剩 10 秒触发催促（只触发一次）
+        w.timeLeftMs = 10000;
+        w.Step(16);
+        Ok(w.hurryPlayed, "剩 10 秒触发催促");
+        Eq(w.shakeFrames, 4, "催促触发轻微震屏");
+        int shake = w.shakeFrames;
+        w.Step(16);
+        Ok(w.shakeFrames < shake, "催促只触发一次");
+        // 时间到 → 判负
+        World w2 = NewWorld(13);
+        w2.gold = 100;
+        w2.timeLeftMs = 100;
+        w2.Step(200);
+        Eq(w2.timeLeftMs, 0, "时间到归零");
+        Eq(w2.levelResult, -1, "时间到判负");
+        Eq(w2.state, World.ST_RESULT, "失败进结算");
+        Eq(w2.totalGold, 100, "本关金币计入累计");
+        // 结算 600ms 冷却
+        Ok(!w2.ConfirmResult(), "结算 600ms 内点不动");
+        w2.Step(700);
+        Ok(w2.ConfirmResult(), "结算 600ms 后可确认");
+        Eq(w2.level, 1, "失败后重开仍在第 1 关");
+        Eq(w2.totalGold, 0, "重开清空累计");
+        Eq(w2.gold, 0, "重开清空本关金币");
+        Eq(w2.dynamites, 1, "重开回到 1 个炸药");
+        Eq(w2.state, World.ST_SWING, "重开回到摆钩");
+        // 达标过关 + 提前完成奖励
+        World w3 = NewWorld(17);
+        w3.gold = w3.Target() - 1;
+        Place(w3, 0, Data.HOOK_X, 400);
+        ThrowOnce(w3, 400);
+        Land(w3, 800);
+        Eq(w3.levelResult, 1, "达标判过");
+        Eq(w3.state, World.ST_RESULT, "过关进结算");
+        int got = (int)(50 * w3.combo.multiplier);
+        int bonus = w3.timeLeftMs / 1000 * 5;
+        Eq(w3.gold, w3.Target() - 1 + got + bonus, "过关结算 = 本关金币 + 提前完成奖励");
+        Eq(w3.totalGold, w3.gold, "累计金币 = 本关金币");
+        Eq(w3.bestLevel, 1, "最佳关卡更新");
+        Eq(w3.bestGold, w3.gold, "最佳单关金币更新");
+        // 过关确认 → 下一关
+        Ok(!w3.ConfirmResult(), "结算 600ms 内确认无效");
+        w3.Step(700);
+        Ok(w3.ConfirmResult(), "结算后可确认进入下一关");
+        Eq(w3.level, 2, "进入第 2 关");
+        Eq(w3.gold, 0, "新一关金币清零");
+        Eq(w3.timeLeftMs, 60000, "新一关时间重置");
+        Eq(w3.dynamites, 2, "过关奖励 1 个炸药");
+        Eq(w3.state, World.ST_SWING, "新一关回到摆钩");
+        Ok(w3.items.Count > 0, "新一关重新铺场");
+        // 炸药上限 3
+        World w4 = NewWorld(19);
+        w4.dynamites = 3;
+        w4.gold = w4.Target() - 1;
+        Place(w4, 0, Data.HOOK_X, 400);
+        ThrowOnce(w4, 400);
+        Land(w4, 800);
+        Eq(w4.levelResult, 1, "达标判过");
+        w4.Step(700);
+        w4.ConfirmResult();
+        Eq(w4.dynamites, 3, "炸药上限 3");
+    }
+
+    // ------------------ 16. 布场（关卡难度） ------------------
+    static void TestPopulate() {
+        World w = NewPopulated(424242);
+        Eq(w.items.Count, 14, "L1 场上 14 件（固定种子 424242）");
+        int field = 0;
+        int junkValue = 0;
+        for (int i = 0; i < w.items.Count; i = i + 1) {
+            ItemDef d = Data.DEFS[w.items[i].kind];
+            if (d.junk) { junkValue = junkValue + d.score; }
+            else { field = field + d.score; }
+        }
+        Eq(field, 1170, "L1 有价物总值 1170");
+        Eq(junkValue, 55, "L1 垃圾分值 55（2 石头 + 1 骷髅）");
+        Ok(field >= w.Target(), "L1 有价物总值够目标（关卡可通）");
+        Eq(CountKind(w, 3), 0, "L1 没有钻石");
+        Eq(CountKind(w, 4), 0, "L1 没有宝箱");
+        Eq(CountKind(w, 9), 0, "L1 没有炸弹");
+        // L2 起出钻石 / 宝箱 / 炸弹
+        World w2 = NewWorld(424242);
+        w2.level = 2;
+        w2.StartLevel();
+        Ok(CountKind(w2, 3) >= 1, "L2 至少 1 颗钻石");
+        Ok(CountKind(w2, 4) >= 1, "L2 至少 1 个宝箱");
+        Ok(CountKind(w2, 9) >= 1, "L2 至少 1 个炸弹");
+        Ok(w2.items.Count > w.items.Count, "L2 场上道具比 L1 多");
+        // 道具都落在钩爪可达的中心带
+        int span = Data.HalfSpan();
+        bool inBand = true;
+        for (int i = 0; i < w2.items.Count; i = i + 1) {
+            int dx = w2.items[i].x - Data.HOOK_X;
+            if (dx < 0) { dx = 0 - dx; }
+            if (dx > span) { inBand = false; }
+        }
+        Ok(inBand, "道具都落在钩爪可达的中心带内");
+    }
+
+    // ------------------ 17. 存档往返 ------------------
+    static void TestSave() {
+        string path = Data.SavePath();
+        if (File.Exists(path)) { File.Delete(path); }
+        World w = new World();
+        w.rng = Rng.Seed(99);
+        w.NewRun(w.rng);
+        w.bestLevel = 3;
+        w.bestGold = 250;
+        w.totalGold = 900;
+        w.Save();
+        Ok(File.Exists(path), "存档文件落盘");
+        List<string> lines = File.ReadAllLines(path);
+        Ok(HasLine(lines, "bestLevel=3"), "存档写 bestLevel=3");
+        Ok(HasLine(lines, "bestGold=250"), "存档写 bestGold=250");
+        Ok(HasLine(lines, "totalGold=900"), "存档写 totalGold=900");
+        Ok(HasLine(lines, "runs=1"), "存档写 runs=1（首次落盘）");
+        // 读回
+        World w2 = new World();
+        w2.Load();
+        Eq(w2.bestLevel, 3, "读回最佳关卡");
+        Eq(w2.bestGold, 250, "读回最佳金币");
+        Eq(w2.totalGold, 900, "读回累计金币");
+        Eq(w2.runs, 1, "读回局数");
+        // 再落一次 → 局数 2
+        w2.Save();
+        List<string> lines2 = File.ReadAllLines(path);
+        Ok(HasLine(lines2, "runs=2"), "再次落盘 runs=2");
+        World w3 = new World();
+        w3.Load();
+        Eq(w3.runs, 2, "再读回局数 2");
+        Eq(w3.bestLevel, 3, "再读回最佳关卡");
+        // 清理：不给后面的存档段留残档
+        File.Delete(path);
+        Ok(!File.Exists(path), "用例清掉自己的存档");
+    }
+
+    // ------------------ 18. 布局与解析小工具 ------------------
+    static void TestDataHelpers() {
+        int w0 = Data.W;
+        Data.W = 960;
+        Eq(Data.HalfSpan(), 440, "W=960 时道具带半宽 440");
+        Data.W = 2000;
+        Eq(Data.HalfSpan(), 520, "宽屏半宽封顶 520");
+        Data.W = 300;
+        Eq(Data.HalfSpan(), 200, "窄屏半宽保底 200");
+        Data.W = w0;
+        Eq(Data.H, 720, "设计高度 720");
+        Eq(Data.ParseIntS("123"), 123, "解析正整数");
+        Eq(Data.ParseIntS("-45"), -45, "解析负整数");
+        Eq(Data.ParseIntS("12abc"), 12, "解析到非数字为止");
+        Eq(Data.ParseIntS(""), 0, "空串解析为 0");
+    }
+
+    // ------------------ 入口 ------------------
+    static int Main(string[] args) {
+        // 存档往返模式：给 tools/test.ps1 的 goldminer_SAVE_OK 段用。
+        if (args != null && args.Length > 0 && args[0] == "save") {
+            return SaveRoundTrip();
+        }
+        // 冻结时钟：连击超时是真实时间判的，冻住才能让连击用例可重复。
+        Window.FreezeTick(1000000);
+        TestItemDefs();
+        TestTargetCurve();
+        TestStartState();
+        TestSwing();
+        TestThrow();
+        TestGrab();
+        TestWeightQte();
+        TestQteWindow();
+        TestScoreAndCombo();
+        TestComboTable();
+        TestMysteryBag();
+        TestBomb();
+        TestTnt();
+        TestDynamite();
+        TestLevelFlow();
+        TestPopulate();
+        TestSave();
+        TestDataHelpers();
+        Window.UnfreezeTick();
+        Console.WriteLine("goldminer_test checks=" + Convert.ToString(checks)
+            + " failures=" + Convert.ToString(failures));
+        if (failures > 0) {
+            Console.WriteLine("goldminer_test FAILED");
+            return 1;
+        }
+        Console.WriteLine("goldminer_test OK");
+        return 0;
+    }
+
+    // 存档往返：第一遍写档（局数 1），第二遍（新进程）读回上一遍的档（局数 2）。
+    static int SaveRoundTrip() {
+        World w = new World();
+        w.rng = Rng.Seed(20260921L);
+        w.NewRun(w.rng);
+        w.Load();
+        if (w.runs == 0) {
+            // 首遍：写一份内容已知的档
+            w.bestLevel = 3;
+            w.bestGold = 250;
+            w.totalGold = 900;
+        }
+        w.Save();
+        Console.WriteLine("GOLDMINER_SAVE runs=" + Convert.ToString(w.runs)
+            + " bestLevel=" + Convert.ToString(w.bestLevel)
+            + " bestGold=" + Convert.ToString(w.bestGold)
+            + " totalGold=" + Convert.ToString(w.totalGold));
+        return 0;
+    }
+}

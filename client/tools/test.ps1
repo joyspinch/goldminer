@@ -1,8 +1,11 @@
-# 黄金矿工 无头冒烟：编译后在 UiDriver 下跑几帧再退出。
+# 黄金矿工 测试：三段全绿才算过。
 #
-# 验证三件事：exe 编译得过、启动后帧循环不崩、demo 标记能让对局场景跑起来
-# （资源内嵌与查找路径通不通）。GUI 游戏没有断言式用例套件，这里的判据是
-# "进程按脚本正常退出 + UiDriver 会话收尾"。
+#   1) goldminer_test_OK            玩法断言用例（纯逻辑，不开窗口/音频）
+#   2) goldminer_SAVE_OK runs=1 -> runs=2   存档两遍：新进程读回上一遍写的档
+#   3) goldminer_SMOKE_OK           无头冒烟：UiDriver 跑几帧后自行退出
+#
+# 判据：每段都有明确标记输出；任何一段缺标记即判失败。
+# 断言用例跑在 build/goldminer/tests/ 下，存档落在自己目录，不碰玩家存档。
 param(
     [string]$Compiler = $env:ZANC,
     [string]$PackageProject = ''
@@ -19,6 +22,37 @@ $out = Join-Path $repo 'build/goldminer'
 & (Join-Path $PSScriptRoot 'build.ps1') -Compiler $Compiler -PackageProject $PackageProject -Output $out
 $exe = Join-Path $out 'GoldMiner.exe'
 if (-not (Test-Path $exe)) { throw "缺少可执行文件：$exe" }
+
+# --- 第一段：玩法断言用例 ---
+# build.ps1 已经把用例编成 <out>/tests/goldminer_test.exe（纯逻辑核心 + 用例自身）。
+$caseExe = Join-Path $out 'tests/goldminer_test.exe'
+if (-not (Test-Path $caseExe)) { throw "缺少用例可执行文件：$caseExe" }
+$caseOut = & $caseExe 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0) { throw "玩法断言用例失败：goldminer_test`n$caseOut" }
+if ($caseOut -notmatch 'goldminer_test OK') { throw "玩法断言用例输出不对：goldminer_test`n$caseOut" }
+if ($caseOut -notmatch 'goldminer_test checks=\d+ failures=0') {
+    throw "玩法断言用例没有全绿：goldminer_test`n$caseOut"
+}
+Write-Host $caseOut.Trim()
+Write-Host "goldminer_test_OK"
+
+# --- 第二段：存档两遍 ---
+# 存档落在用例 exe 自己的目录（build/goldminer/tests/），不碰玩家存档。
+$saveFile = Join-Path $out 'tests/goldminer_save.txt'
+if (Test-Path $saveFile) { Remove-Item $saveFile -Force }
+$saveOut1 = & $caseExe save 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0) { throw "存档第一遍失败`n$saveOut1" }
+if ($saveOut1 -notmatch 'runs=1') { throw "第一遍存档没写成局数 1：$saveOut1" }
+if (-not (Test-Path $saveFile)) { throw "存档文件没落盘：$saveFile" }
+$saveOut2 = & $caseExe save 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0) { throw "存档第二遍失败`n$saveOut2" }
+if ($saveOut2 -notmatch 'runs=2') { throw "第二遍没读回上一遍的存档（期望 runs=2）：$saveOut2" }
+if ($saveOut2 -notmatch 'bestLevel=3' -or $saveOut2 -notmatch 'bestGold=250' -or $saveOut2 -notmatch 'totalGold=900') {
+    throw "第二遍没读回上一遍写的档内容：$saveOut2"
+}
+Write-Host "goldminer_SAVE_OK runs=1 -> runs=2"
+
+# --- 第三段：无头冒烟 ---
 # demo 标记：进对局自弈场景（比停在主菜单多跑一层玩法渲染）
 [IO.File]::WriteAllText((Join-Path $out 'goldminer_demo.txt'), 'demo', [Text.UTF8Encoding]::new($false))
 # UiDriver 脚本：等几帧 → dump → 退出（无头，不弹窗口）
