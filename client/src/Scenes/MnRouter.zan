@@ -5,10 +5,14 @@ using Game.Foundation.Gui;
 
 // 黄金矿工的场景路由：首场景装载前把皮肤换上。
 //
-// 皮肤包（client/assets/skins/goldminer/skin.css）必须与 exe 同级：
-// build/goldminer/skins/goldminer/skin.css。Gui.Styling.Skin.Roots 查的
-// 是 exe 同级 skins/ 与 assets/skins/，构建脚本把皮肤包、公共包的
-// base.css 组件基线与 dark 底座一起拷过去（见 client/tools/build.ps1）。
+// 皮肤包（client/assets/skins/goldminer/skin.css）有两种送达方式：
+//   1) 编译期内嵌：构建脚本用 --embed 按单文件规格烤成 skins/goldminer/skin.css，
+//      单文件发布也带着皮肤（Gui.Styling.Skin.Load 找不到磁盘副本时读内嵌副本）。
+//   2) 磁盘副本：build/goldminer/skins/goldminer/skin.css（Gui.Styling.Skin.Roots
+//      查 exe 同级 skins/ 与 assets/skins/）。留着是为了改 CSS 不用重编——
+//      运行时磁盘优先，会盖住内嵌副本。
+// 控件基线 base.css 与 dark 底座**只走内嵌**（编译器自动烤 Gui/skins 基线），
+// 磁盘上不再放一份：放了就会盖住内嵌基线，那条兜底路径永远测不到。
 //
 // 顺序：先 UseSkin("dark") 铺底座，再 UseSkin("goldminer") 叠本游戏的
 // 皮肤——反了会被默认皮肤盖回去。App 在建好窗口之后才有皮肤可换，所以
@@ -20,5 +24,11 @@ public class MnRouter : SceneRouter {
         if (host.App() == null) { return; }
         host.App().UseSkin("dark");
         host.App().UseSkin("goldminer");
+        // 换肤自检：把**实际生效**的皮肤名打出来，测试脚本据此断言。
+        // 截图只能判"好不好看"，判不了"换没换成功"（控件退回默认外观时
+        // 画面依然能看，只是变成系统默认控件）。
+        if (Environment.GetEnvironmentVariable("MINER_SKIN_PROBE") == "1") {
+            Console.WriteLine("SKIN applied=" + host.App().SkinName());
+        }
     }
 }

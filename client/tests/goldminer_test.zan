@@ -909,13 +909,15 @@ public class GoldMinerTest {
 
     // ------------------ 26. 皮肤与美术底板（去原生风） ------------------
     static void TestSkinAndAssets() {
-        // 皮肤包必须与 exe 同级：UseSkin 找的是 exe/skins/<名>/skin.css
+        // 本游戏的皮肤包在 exe 同级（改 CSS 不用重编，运行时磁盘优先）
         Ok(File.Exists(Assets.Find("skins/goldminer/skin.css")),
            "皮肤包与 exe 同级（UseSkin 能找到）");
-        Ok(File.Exists(Assets.Find("skins/base.css")),
-           "控件基线 base.css 与 exe 同级");
-        Ok(File.Exists(Assets.Find("skins/dark/skin.css")),
-           "底座皮肤 dark 与 exe 同级");
+        // 控件基线 base.css 与 dark 底座由编译器自动内嵌（Gui/skins 基线），
+        // 磁盘上不再手工拷：拷了就会盖住内嵌兜底，那条路径永远测不到。
+        Ok(!File.Exists(Assets.Find("skins/base.css")),
+           "磁盘上没有手工拷的 base.css（靠编译器内嵌兜底）");
+        Ok(!File.Exists(Assets.Find("skins/dark/skin.css")),
+           "磁盘上没有手工拷的 dark 底座（靠编译器内嵌兜底）");
         Ok(File.Exists(Assets.Find("assets/skins/goldminer/skin.css")),
            "皮肤包源文件在 assets 下");
         // 精灵表尺寸必须与代码里的帧宽×帧数一致（烘焙与运行时不许漂）

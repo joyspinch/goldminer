@@ -96,17 +96,31 @@ border-image，九宫格得自己裁源矩形拼 9 块，见
 
 ## 四、皮肤包（`client/assets/skins/goldminer/skin.css`）
 
-- 位置：构建时拷到 `build/goldminer/skins/goldminer/skin.css`（**与 exe
-  同级**——`Gui.Styling.Skin.Roots` 查的是 exe 同级 `skins/` 与
-  `assets/skins/`）。
-- 一并拷公共包的两样东西：`skins/base.css`（控件基线，皮肤里的
-  `var(--radius-*)` 等度量要靠它展开）与 `skins/dark/`（底座皮肤）。
+皮肤有三份来源，**各管一段**，别混：
+
+| 来源 | 内容 | 谁负责 |
+|---|---|---|
+| 编译器自动内嵌 | 控件基线 `skins/base.css` + 底座 `skins/dark/` | zanc 自动烤 `Gui/skins` 基线（见 zan-lang `docs/ZANC_CLI.md` 的 `--embed` 一节） |
+| 本项目内嵌 | `skins/goldminer/skin.css` | 构建脚本 `--embed <skin.css>=skins/goldminer/skin.css`（**单文件规格**） |
+| 磁盘副本 | `build/goldminer/skins/goldminer/skin.css` | 构建脚本拷贝——改 CSS 不用重编（运行时磁盘优先，会盖住内嵌副本） |
+
+- **磁盘上不再手工拷 `base.css` / `dark/`**：`Gui.Styling.Skin.BaseCss()` 与
+  `Skin.Load()` 都是**磁盘优先、内嵌兜底**，少了磁盘副本照样有基线；拷了反而
+  会盖住内嵌兜底，那条路径永远测不到。
+- 内嵌规格为什么是**单文件**而不是目录：编译器对 `=skins` 规格有白名单过滤
+  （只放行 `dark`/`light` + `zan.proj` 的 `skinlist=` 声明过的包），而 `zan.proj`
+  在**公共包根**（zan-lang），不是本项目——目录规格会把本游戏这一包直接滤掉，
+  编译器还会报 `--embed '...' matched no readable file`。
 - 运行时顺序：`UseSkin("dark")` → `UseSkin("goldminer")`，**反了会被默认
   皮肤盖回去**（见 `client/src/Scenes/MnRouter.zan`）。
 - 皮肤包只能写纯色/渐变令牌：引擎的样式表**不解析 url() 背景图**，主题
   贴图一律走画布的美术底板 + 九宫格。
 - 令牌值与 `client/src/GoldminerPalette.zan` 一一对应，用例按文件内容
   交叉核对（皮肤改了色板没改会被用例逮住）。
+- 自检：`GoldMiner.exe skin-probe` 打印内嵌/磁盘两边的实际状态
+  （`embed_base=1 embed_dark=1 embed_pack=1 disk_base=0 disk_pack=1`），
+  `client/tools/test.ps1` 的第四段 `goldminer_SKIN_OK` 断言它；
+  冒烟段另断言换肤真的生效（`SKIN applied=goldminer`）。
 
 ## 五、位图清单
 

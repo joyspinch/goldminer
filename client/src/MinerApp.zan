@@ -514,13 +514,59 @@ public class MinerApp {
         if (ProcessHost.Env("MINER_SIM") == "1") {
             return MinerApp.SimRun();
         }
+        // 皮肤资源自检:证明"基线与皮肤包都由编译器内嵌、磁盘不必再放 base.css"。
+        // 纯读内嵌资源,不开窗口(这条判不了,只能靠断言)。
+        if (args != null && args.Length > 0 && args[0] == "skin-probe") {
+            return MinerApp.SkinProbe();
+        }
         SceneRouter router = new MnRouter(new GuiHost("黄金矿工", Data.W,
                                                       Data.H, 16));
         MinerApp a = MinerApp.Create(router.Host());
         router.Register("play", new MnPlayScene(a));
         router.Register("over", new MnOverScene(a));
-        router.Run("play");
+        // 结算页直开（视觉自检用）：MINER_SCENE=over。
+        // 截图只用来判"好不好看/像不像"——"换没换成功"由断言判
+        // （MINER_SKIN_PROBE 打出生效的皮肤名）。
+        bool overOnly = ProcessHost.Env("MINER_SCENE") == "over";
+        router.Run(overOnly ? "over" : "play");
         return 0;
+    }
+
+    // 皮肤资源自检(不开窗口):把"内嵌里有什么、磁盘上有什么"打成两行,
+    // 测试脚本据此断言:
+    //   embed_base=1        编译器自动内嵌的控件基线(base.css)在
+    //   embed_dark=1        底座皮肤 dark 在
+    //   embed_pack=1        本游戏皮肤包在(构建脚本 --embed 单文件规格)
+    //   embed_assets_pack=1 assets/ 整目录内嵌时皮肤包也在(另一条路径)
+    //   disk_base=0         磁盘上**没有**手工拷的基线——拷了会盖住内嵌兜底
+    //   disk_pack=1         磁盘上有本游戏皮肤包副本(改 CSS 不用重编)
+    // 跑法:GoldMiner.exe skin-probe
+    static int SkinProbe() {
+        string baseCss = "";
+        string packCss = "";
+        if (File.EmbedExists("skins/base.css")) {
+            baseCss = File.ReadAllText("skins/base.css");
+        }
+        if (File.EmbedExists("skins/goldminer/skin.css")) {
+            packCss = File.ReadAllText("skins/goldminer/skin.css");
+        }
+        bool dark = File.EmbedExists("skins/dark/skin.css");
+        bool assetsPack = File.EmbedExists("assets/skins/goldminer/skin.css");
+        bool diskBase = File.Exists(Assets.ExeDir() + "/skins/base.css");
+        bool diskPack = File.Exists(Assets.ExeDir() + "/skins/goldminer/skin.css");
+        bool packToken = packCss.IndexOf("--primary: #FFE8BE60;") >= 0;
+        Console.WriteLine("SKIN embed_base=" + (baseCss.Length > 0 ? 1 : 0)
+                          + " embed_dark=" + (dark ? 1 : 0)
+                          + " embed_pack=" + (packCss.Length > 0 ? 1 : 0)
+                          + " embed_assets_pack=" + (assetsPack ? 1 : 0));
+        Console.WriteLine("SKIN base_len=" + baseCss.Length
+                          + " pack_len=" + packCss.Length
+                          + " pack_token=" + (packToken ? 1 : 0)
+                          + " disk_base=" + (diskBase ? 1 : 0)
+                          + " disk_pack=" + (diskPack ? 1 : 0));
+        bool ok = baseCss.Length > 0 && dark && packCss.Length > 0 && packToken
+                  && !diskBase;
+        return ok ? 0 : 1;
     }
 
     // 无头仿真:模拟一个"会连点的中等玩家"打关,输出经济快照 + 不变量检查。

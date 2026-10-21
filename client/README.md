@@ -43,6 +43,7 @@ GuiHost 版（Game.Foundation.Gui）：窗口/事件/呈现由 packages/Zan.Gui/
 - 皮肤包（assets/skins/goldminer/skin.css）：结算页的标准库控件
   （按钮/文本）走皮肤，不留系统默认外观；启动时
   `UseSkin("dark")` → `UseSkin("goldminer")`（src/Scenes/MnRouter.zan）；
+  控件基线与 dark 底座由编译器自动内嵌，磁盘上不再手工拷；
 - 音频：System.Audio 原生驱动（AudioClip）；打开失败自动哑火，
   不影响运行。
 
@@ -59,6 +60,10 @@ GuiHost 版（Game.Foundation.Gui）：窗口/事件/呈现由 packages/Zan.Gui/
 根目录下（公共包在 zan-lang 仓库的 packages/ 下，编译要带 --package-project）：
 
     pwsh -File client/tools/build.ps1
+
+`--package-project` 默认指**主仓库** `D:\project\zan-lang`（只读）；要换用
+别的包根就显式传 `-PackageProject <路径>`。**不要为公共包建 git worktree
+副本**——副本停在旧 commit 上，公共包一改就跟不上（曾经因此白干一轮）。
 
 产物在 build/goldminer/，运行所需 DLL 与 assets/ 一并落在同目录。
 手动编译（同样在根目录下）：
@@ -89,9 +94,13 @@ IDE「新建项目」复制本模板后 assets/ 与 src/ 同级，同样自动�
 
 素材的**统一命名 / 缩放 / 量化 / 朝向帧烘焙**由
 `client/tools/bake_assets.py` 负责（总量 589.6 KB）；原图不入库，
-管线与尺寸口径见 [ASSETS.md](ASSETS.md)。皮肤包必须与 exe 同级，
-构建脚本会把它连同公共包的 `base.css` 与 `dark/` 一起拷到
-`build/goldminer/skins/`。
+管线与尺寸口径见 [ASSETS.md](ASSETS.md)。
+
+皮肤：控件基线 `base.css` 与 `dark` 底座由**编译器自动内嵌**（磁盘上不再
+手工拷——`Skin.BaseCss()` 是磁盘优先、内嵌兜底）；本游戏的皮肤包由构建脚本
+按单文件规格 `--embed` 烤成 `skins/goldminer/skin.css`（单文件发布也带着
+皮肤），同时在 `build/goldminer/skins/goldminer/` 留一份磁盘副本供改 CSS
+不用重编。自检跑 `GoldMiner.exe skin-probe`。
 
 文件
 ----
@@ -113,15 +122,26 @@ IDE「新建项目」复制本模板后 assets/ 与 src/ 同级，同样自动�
 pwsh -File client/tools/test.ps1
 ```
 
-三段全绿才算过：
+四段全绿才算过：
 
 - `goldminer_test_OK` —— 玩法断言用例：摆钩限位、放钩速度、抓取判定半径、
   重量→收线 QTE、连击倍率与超时、神秘袋开袋表、炸弹拆弹、TNT 连锁、炸药
-  道具、关卡时间与推进、得分与结算、存档往返（用例 exe 跑在
-  `build/goldminer/tests/` 下，存档落在自己目录，不碰玩家存档）；
+  道具、关卡时间与推进、得分与结算、朝向纯函数、皮肤与素材布局、存档往返
+  （用例 exe 跑在 `build/goldminer/tests/` 下，存档落在自己目录，不碰玩家存档）；
 - `goldminer_SAVE_OK runs=1 -> runs=2` —— 存档两遍：第二遍是新进程，读回
   第一遍写的档；
-- `goldminer_SMOKE_OK` —— 无头冒烟：UiDriver 跑几帧后自行退出。
+- `goldminer_SMOKE_OK` —— 无头冒烟：UiDriver 跑几帧后自行退出（顺带断言
+  换肤真的生效：stdout 里应有 `SKIN applied=goldminer`）；
+- `goldminer_SKIN_OK` —— 皮肤资源自检：基线 `base.css`、底座 `dark/`、
+  本游戏皮肤包都在 exe 内嵌里（`GoldMiner.exe skin-probe` 打印实际状态），
+  且磁盘上**没有**手工拷的基线。
 
 `build.ps1` 会把用例编成 `build/goldminer/tests/goldminer_test.exe`
 （`-BuildTests:$false` 可跳过）。
+
+调试开关
+--------
+- `MINER_SIM=1`（可配 `MINER_SIM_SEED`）—— 无头平衡仿真，打 8 关并校验经济曲线；
+- `MINER_SCENE=over` —— 直接开结算页（视觉自检用：截图判"像不像"，
+  判不了"换没换成功"，后者走断言）；
+- `MINER_SKIN_PROBE=1` —— 启动后打出实际生效的皮肤名。
