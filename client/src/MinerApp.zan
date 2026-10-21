@@ -325,8 +325,8 @@ public class MinerApp {
                          urgent ? 120 : 226,
                          urgent ? 96 : 212, 255);
         xr = xr - tw - 28;
-        if (wo.combo >= 2) {
-            string ctxt = "连击 x" + Convert.ToString(wo.combo);
+        if (wo.combo.count >= 2) {
+            string ctxt = "连击 x" + Convert.ToString(wo.combo.count);
             int cw = CText.Width(ctxt, 2);
             CText.DrawShadow(rd, ctxt, xr - cw, oy + 10, 2, 240, 176, 80, 255);
         }
@@ -473,13 +473,13 @@ public class MinerApp {
         // 金圈(命中区)
         CDraw.CircleStroke(rd, cx, cy, 44, 2, 255, 210, 80, 255);
         // 白圈(收缩)
-        int wr = (int)wo.qteRing;
+        int wr = (int)wo.qte.radius;
         if (wr < 8) { wr = 8; }
         CDraw.CircleStroke(rd, cx, cy, wr, 2, 255, 255, 255, 235);
         // 进度点
-        for (int i = 0; i < wo.qteNeed; i = i + 1) {
-            int dx = cx - wo.qteNeed * 10 + i * 20 + 5;
-            if (i < wo.qteDone) {
+        for (int i = 0; i < wo.qte.need; i = i + 1) {
+            int dx = cx - wo.qte.need * 10 + i * 20 + 5;
+            if (i < wo.qte.done) {
                 CDraw.FillCircle(rd, dx, cy + 74, 6, 130, 240, 120, 255);
             } else {
                 CDraw.FillCircle(rd, dx, cy + 74, 6, 70, 70, 80, 255);
@@ -609,7 +609,7 @@ public class MinerApp {
                     if (best != null) { w.Action(); captured = captured + 1; }
                 } else if (w.state == World.ST_QTE) {
                     // AI:白圈进入金圈即命中(20% 空点,模拟手残)
-                    if (w.qteRing >= 34.0 && w.qteRing <= 54.0 && f % 5 != 0) {
+                    if (w.qte.InWindow() && f % 5 != 0) {
                         w.Action();
                     }
                 } else if (w.state == World.ST_BOMB) {

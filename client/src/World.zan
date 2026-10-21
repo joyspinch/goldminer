@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using Gui;
+using Game.Foundation;
 
 public class World {
     public const int ST_SWING = 0;  // 摆钩中
@@ -27,18 +28,15 @@ public class World {
     // 物理绝不能私存开局副本：此前 hookX/hookY 固定 480/170，绘制却
     // 用新中心，"爪画在哪、判定在别处"——显示与抓取两套坐标。
 
-    // FEVER 连击
-    public int combo = 0;
-    public double comboMul = 1.0;  // 1.0 .. 2.0
-    public long lastScoreMs = 0;  // 上次有价物入账时间
-    public int feverGlow = 0;  // 0..255 视觉强度
+    // FEVER 连击（规则与倍率在 Game.Foundation.ComboMeter：计数、倍率、
+    // 超时清零只在一处算，表现层只取数值画光晕与 HUD）
+    public ComboMeter combo = new ComboMeter()
+        .WithTimeout(3200).WithStep(0.1).WithMax(2.0).WithFever(3, 200, 40);
+    public int feverGlow = 0;  // 0..255 视觉强度（目标值取 combo.GlowTarget()）
 
-    // 收线 QTE(拉重物时)
-    public double qteRing;  // 白圈半径(收缩)
-    public int qteDone;  // 已完成次数
-    public int qteNeed;  // 需要次数(重量越大越多)
-    public int qteBoost;  // 命中后的加速帧数
-    public int qteMissPenalty;  // miss 次数(仅演出)
+    // 收线 QTE（判定在 Game.Foundation.RingQte：收缩、窗口命中、命中计数）
+    public RingQte qte = new RingQte().WithTiming(96.0, 14.0, 340.0, 34.0, 54.0);
+    public int qteBoost = 0;  // 命中后的加速帧数
 
     // 拆弹 QTE
     public int bombClicks = 0;
@@ -104,8 +102,7 @@ public class World {
         this.clawLen = 110.0;
         this.clawV = 0.0;
         this.hookedKind = -1;
-        this.combo = 0;
-        this.comboMul = 1.0;
+        this.combo.Reset();
         this.feverGlow = 0;
         this.levelResult = 0;
         this.resultWait = 0;
@@ -206,13 +203,11 @@ public class World {
         if (this.flashFrames > 0) { this.flashFrames = this.flashFrames - 1; }
         this.StepFx(dtMs);
 
-        // FEVER 衰减:3.2 秒没进账清零
-        if (this.combo > 0 && this.state != World.ST_RESULT
-            && NowMs() - this.lastScoreMs > 3200) {
-            this.combo = 0;
-            this.comboMul = 1.0;
+        // FEVER 衰减:3.2 秒没进账清零（结算界面保留连击显示，不清）
+        if (this.state != World.ST_RESULT) {
+            this.combo.Expire(NowMs());
         }
-        int glowTarget = this.combo >= 3 ? 200 : this.combo * 40;
+        int glowTarget = this.combo.GlowTarget();
         if (this.feverGlow < glowTarget) { this.feverGlow = this.feverGlow + 12; }
         else if (this.feverGlow > glowTarget) { this.feverGlow = this.feverGlow - 6; }
 
@@ -321,12 +316,8 @@ public class World {
     }
 
     void StepQte(int dtMs, double dt) {
-        // 白圈收缩,到底后重置继续,直到完成 qteNeed 次
-        this.qteRing = this.qteRing - dt * 340.0;
-        if (this.qteRing <= 14.0) {
-            this.qteRing = 96.0;
-            this.qteMissPenalty = this.qteMissPenalty + 1;
-        }
+        // 白圈收缩,到底后重置继续,直到命中 need 次
+        this.qte.Update(dtMs);
         // 收线同时缓慢回收绳长(基础速度),QTE 命中给大加速
         ItemDef d = Data.DEFS[this.hookedKind];
         double baseV = 720.0 / (0.5 + d.weight * 0.62);
@@ -353,17 +344,12 @@ public class World {
         }
         if (this.state == World.ST_QTE) {
             // 白圈在金圈(34..54)内算命中
-            if (this.qteRing >= 34.0 && this.qteRing <= 54.0) {
-                this.qteDone = this.qteDone + 1;
+            if (this.qte.Hit()) {
                 this.qteBoost = 900;
-                this.qteRing = 96.0;
                 this.Spark(this.TipX(), this.TipY(), 255, 220, 90, 10);
-                if (this.qteDone >= this.qteNeed) {
+                if (this.qte.Complete()) {
                     this.state = World.ST_RETRACT;  // 提前完成,纯加速收线
                 }
-            } else {
-                this.qteMissPenalty = this.qteMissPenalty + 1;
-                this.qteRing = 96.0;
             }
             return;
         }
@@ -394,8 +380,7 @@ public class World {
         this.boomTnt = 0;
         this.Shake(8, 200);
         // 炸掉钩上物,清连击
-        this.combo = 0;
-        this.comboMul = 1.0;
+        this.combo.Break();
         this.hookedKind = -1;
         if (this.state == World.ST_QTE) { this.state = World.ST_RETRACT; }
         return true;
@@ -445,24 +430,20 @@ public class World {
         int score = d.score;
         if (d.junk) {
             // 垃圾:清连击
-            if (this.combo >= 3) { this.Float("连击中断!", cx, cy - 30, 200, 200, 210); }
-            this.combo = 0;
-            this.comboMul = 1.0;
+            if (this.combo.count >= 3) { this.Float("连击中断!", cx, cy - 30, 200, 200, 210); }
+            this.combo.Break();
             this.Float(d.name + " +" + score, cx, cy, 190, 190, 200);
             this.AddGold(score, null, 0, 0, 0);
             return;
         }
         // 有价物:连击增长
-        this.combo = this.combo + 1;
-        this.lastScoreMs = NowMs();
-        this.comboMul = 1.0 + this.combo * 0.1;
-        if (this.comboMul > 2.0) { this.comboMul = 2.0; }
-        int got = (int)(score * this.comboMul);
+        this.combo.Hit(NowMs());
+        int got = (int)(score * this.combo.multiplier);
         string label = "+" + got;
-        if (this.combo >= 2) { label = "+" + got + "  x" + this.combo; }
+        if (this.combo.count >= 2) { label = "+" + got + "  x" + Convert.ToString(this.combo.count); }
         int cr = 255; int cg = 220; int cb = 90;
-        if (this.combo >= 5) { cr = 255; cg = 150; cb = 60; }
-        if (this.combo >= 8) { cr = 255; cg = 90; cb = 90; }
+        if (this.combo.count >= 5) { cr = 255; cg = 150; cb = 60; }
+        if (this.combo.count >= 8) { cr = 255; cg = 90; cb = 90; }
         this.Float(label, cx, cy, cr, cg, cb);
         this.AddGold(got, null, 0, 0, 0);
         this.Spark(cx, cy, 255, 215, 80, 14);
@@ -518,11 +499,9 @@ public class World {
         // 重物进入收线 QTE
         if (d.weight >= 9 && it.kind != 8 && it.kind != 9) {
             this.state = World.ST_QTE;
-            this.qteRing = 96.0;
-            this.qteDone = 0;
-            this.qteNeed = 1 + d.weight / 6;
+            this.qte.WithNeed(1 + d.weight / 6);
+            this.qte.Reset();
             this.qteBoost = 0;
-            this.qteMissPenalty = 0;
         }
         this.Spark(it.x, it.y, 200, 200, 210, 8);
     }
@@ -558,8 +537,7 @@ public class World {
         this.boomTnt = 1;
         if (depth == 0) {
             this.Shake(12, 260);
-            this.combo = 0;
-            this.comboMul = 1.0;
+            this.combo.Break();
         }
         int chains = 0;
         for (int i = 0; i < this.items.Count; i = i + 1) {
