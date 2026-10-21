@@ -63,10 +63,11 @@ $assets = Join-Path $project 'assets'
 $outAssets = Join-Path $Output 'assets'
 if (Test-Path $outAssets) { Remove-Item $outAssets -Recurse -Force }
 if (Test-Path $assets) { Copy-Item $assets $Output -Recurse -Force }
-# 皮肤：exe 旁只留**本游戏这一份**皮肤包（改 CSS 不用重编，运行时磁盘优先）。
-# 控件基线 base.css 与 dark 底座由编译器自动内嵌，磁盘上不再放——
-# 放了就会"磁盘副本盖住内嵌基线"，那条兜底路径永远测不到。
+# 皮肤包必须与 exe 同级：build/goldminer/skins/goldminer/skin.css
+# （Gui.Styling.Skin.Roots 查的是 exe 同级 skins/ 与 assets/skins/）。
 $skinSrc = Join-Path $assets 'skins/goldminer'
+# 先把输出目录里上一版的 skins/ 整个清掉：老构建拷过 base.css 与 dark/，
+# 留着会盖住 exe 内嵌的基线，让"内嵌兜底到底有没有生效"永远测不出来。
 $skinRoot = Join-Path $Output 'skins'
 if (Test-Path $skinRoot) { Remove-Item $skinRoot -Recurse -Force }
 if (Test-Path $skinSrc) {
@@ -74,6 +75,12 @@ if (Test-Path $skinSrc) {
     New-Item -ItemType Directory -Force -Path $skinDst | Out-Null
     Copy-Item (Join-Path $skinSrc '*') $skinDst -Recurse -Force
 }
+# 控件基线 base.css **不在这里拷**：zanc 会自动内嵌 stdlib 的 Gui 皮肤基线
+# （含 base.css 与 dark/light——见 src/compiler/main.c 的 skins 自动内嵌分支；
+# embedres 的过滤器只作用于 depth-1 的皮肤包目录，base.css 是文件照内嵌）。
+# 运行时 Gui 也是磁盘优先、内嵌兜底（Gui.Styling.Skin.BaseCss），所以 exe 旁
+# 不必再放一份 base.css——省掉它还免了"磁盘旧基线盖住 exe 内嵌新基线"的漂移。
+# 只有"整体替换基线"（自带完整 base.css 替身）才会让编译器跳过基线自动内嵌。
 Write-Host "Built $exe"
 
 # --- 玩法断言用例：单独编一个测试 exe ---

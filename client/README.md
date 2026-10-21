@@ -113,8 +113,9 @@ IDE「新建项目」复制本模板后 assets/ 与 src/ 同级，同样自动�
 - src/Scenes/MnRouter.zan   场景路由（启动时套皮肤包）
 - tools/bake_assets.py      素材流水线（统一命名/瘦身/朝向帧/UI 底板）
 - tests/goldminer_test.zan  玩法断言用例（纯逻辑，不建窗口/不开音频）
-- zan.proj        IDE 项目文件（IDE「新建项目 → 游戏」可直接套用）
-- template.manifest 模板清单（IDE 新建项目对话框展示）
+- zan.proj        IDE 项目文件（IDE「新建项目 → 游戏」可直接套用）；
+                  type = gui——这是窗口程序，IDE 按 gui 工程给窗口子系统与驱动路径
+                  （写成 console 的话 IDE 侧当控制台程序处理，窗口与皮肤都不对）
 
 测试
 ----
