@@ -34,14 +34,25 @@ pwsh -File client/tools/build.ps1 -ZancArgs '--publish','--target','android-arm6
 GuiHost 版（Game.Foundation.Gui）：窗口/事件/呈现由 packages/Zan.Gui/src/Gui 原生
 外壳承担，不依赖 SDL。全部画面走 Canvas 直绘：
 
-- 场景层（src/main.zan 的 DrawAll）：背景、矿工、抓钩（矢量三爪钩，
-  随摆角旋转——画布暂无旋转贴图）、物品、粒子、飘字、QTE 圈，
-  经 Game.Kit 的 CDraw/CText 绘制；
-- HUD 层（DrawFallbackHud）：半透明顶栏（关卡、金币进度、厘秒
-  倒计时、连击、炸药）与结算/拆弹面板，同一套 CText 场景层自绘，
-  信息始终可读。
+- 场景层（src/main.zan 的 DrawAll）：背景、矿工、抓钩（手绘美术 + 离线
+  烘焙的方向帧）、物品、粒子、飘字、QTE 圈，经 Game.Kit 的
+  CDraw/CText 绘制；
+- HUD 层（DrawFallbackHud）：顶栏（关卡、金币进度、厘秒倒计时、连击、
+  炸药）与拆弹面板，面板一律**美术底板 + 九宫格自切**
+  （src/GoldminerPaint.zan），文字带描边，压在亮岩层上也读得清；
+- 皮肤包（assets/skins/goldminer/skin.css）：结算页的标准库控件
+  （按钮/文本）走皮肤，不留系统默认外观；启动时
+  `UseSkin("dark")` → `UseSkin("goldminer")`（src/Scenes/MnRouter.zan）；
 - 音频：System.Audio 原生驱动（AudioClip）；打开失败自动哑火，
   不影响运行。
+
+朝向
+----
+引擎运行时转不了图（Canvas.BlitImage 只有源矩形，没有旋转也没有水平
+翻转），所以钩子的 12 个方向帧与矿工的左右两帧都是**离线烘焙**好的
+精灵表，运行时按摆角取帧（纯函数 `src/GoldminerFacing.zan`）。钩头
+方向、矿工朝向、抓取判定点、绳头位置四处用的是同一套几何口径
+（详见 [ASSETS.md](ASSETS.md)）。
 
 构建
 ----
@@ -76,11 +87,22 @@ IDE「新建项目」复制本模板后 assets/ 与 src/ 同级，同样自动�
 时编译器只能看到 `.`，会定位不到 assets/——换绝对路径或带
 `src\` 前缀即可。
 
+素材的**统一命名 / 缩放 / 量化 / 朝向帧烘焙**由
+`client/tools/bake_assets.py` 负责（总量 589.6 KB）；原图不入库，
+管线与尺寸口径见 [ASSETS.md](ASSETS.md)。皮肤包必须与 exe 同级，
+构建脚本会把它连同公共包的 `base.css` 与 `dark/` 一起拷到
+`build/goldminer/skins/`。
+
 文件
 ----
 - src/main.zan    入口 + 场景渲染/输入/兜底 HUD/无头自测
                   （MINER_SIM=1 平衡仿真，不建窗口）
 - src/World.zan    核心玩法：摆钩、抓取、物品表、连击/QTE/炸弹、关卡与存档
+- src/GoldminerFacing.zan  朝向纯函数：摆角 → 精灵表帧号
+- src/GoldminerPaint.zan    画布美术底板（九宫格自切）+ 描边文字
+- src/GoldminerPalette.zan  项目色板（与皮肤包令牌一一对应）
+- src/Scenes/MnRouter.zan   场景路由（启动时套皮肤包）
+- tools/bake_assets.py      素材流水线（统一命名/瘦身/朝向帧/UI 底板）
 - tests/goldminer_test.zan  玩法断言用例（纯逻辑，不建窗口/不开音频）
 - zan.proj        IDE 项目文件（IDE「新建项目 → 游戏」可直接套用）
 - template.manifest 模板清单（IDE 新建项目对话框展示）

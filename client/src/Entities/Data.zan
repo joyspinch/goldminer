@@ -31,6 +31,23 @@ public class Data {
         return Assets.ExeDir() + "/goldminer_save.txt";
     }
 
+    // 读 PNG 头 IHDR 取尺寸(大端)。素材由构建管线统一生成,尺寸可靠;
+    // 解析失败返回 false,调用方退回正方形假设。
+    // 放在 Data 里而不是 MinerApp:用例 exe 不含 MinerApp(带窗口依赖),
+    // 但断言要核对"精灵表尺寸 == 代码里的帧宽×帧数"。
+    public static bool PngSize(string path, int[] outWH) {
+        outWH[0] = 0; outWH[1] = 0;
+        if (path == null || !File.Exists(path)) { return false; }
+        byte[] b = File.ReadAllBytes(path);
+        if (b.Length < 24) { return false; }
+        if (b[0] != 137 || b[1] != 80 || b[2] != 78 || b[3] != 71) { return false; }
+        outWH[0] = (b[16] & 255) << 24 | (b[17] & 255) << 16
+                 | (b[18] & 255) << 8 | (b[19] & 255);
+        outWH[1] = (b[20] & 255) << 24 | (b[21] & 255) << 16
+                 | (b[22] & 255) << 8 | (b[23] & 255);
+        return outWH[0] > 0 && outWH[1] > 0;
+    }
+
     // 音效加载:磁盘优先,内嵌直接内存加载(全程不落盘)
     public static AudioClip LoadWav2(string rel) {
         string p = Assets.Find(rel);

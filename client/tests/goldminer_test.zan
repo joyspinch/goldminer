@@ -122,6 +122,14 @@ public class GoldMinerTest {
         return false;
     }
 
+    // 行内包含（CSS 令牌那种带缩进的长行用）
+    static bool HasText(List<string> lines, string part) {
+        for (int i = 0; i < lines.Count; i = i + 1) {
+            if (lines[i].IndexOf(part) >= 0) { return true; }
+        }
+        return false;
+    }
+
     // 神秘袋开袋表：roll<42 小金块 / <68 金块 / <82 钻石 / <92 金币袋 /
     // <97 大金块 / 否则炸弹。roll 是 rng.Range(0,100) 的返回值。
     static int BagKindOf(int roll) {
@@ -723,6 +731,248 @@ public class GoldMinerTest {
         Eq(Data.ParseIntS(""), 0, "空串解析为 0");
     }
 
+    // ------------------ 19. 爪子方向帧（纯函数） ------------------
+    static void TestClawFacing() {
+        Eq(GoldminerFacing.ClawFrames, 12, "爪子方向帧数 12");
+        // 步长必须等于 摆角区间/帧数（别只信常量）
+        EqD(GoldminerFacing.ClawAngleStep,
+            (GoldminerFacing.ClawMaxAngle - GoldminerFacing.ClawMinAngle)
+                / (double)GoldminerFacing.ClawFrames,
+            "爪子帧步长 = 摆角区间 / 帧数");
+        // 端点与中点
+        Eq(GoldminerFacing.ClawFrame(25.0), 0, "摆角 25° 取第 0 帧");
+        Eq(GoldminerFacing.ClawFrame(155.0), 11, "摆角 155° 取第 11 帧");
+        Eq(GoldminerFacing.ClawFrame(90.0), 6, "摆角 90°（垂直向下）取第 6 帧");
+        // 越界夹紧（世界本来就限制在 [25,155]，这里钉住兜底行为）
+        Eq(GoldminerFacing.ClawFrame(0.0), 0, "摆角 0° 夹到首帧");
+        Eq(GoldminerFacing.ClawFrame(180.0), 11, "摆角 180° 夹到末帧");
+        Eq(GoldminerFacing.ClawFrame(-30.0), 0, "负摆角夹到首帧");
+        // 整段区间：帧号合法且随角度单调不减
+        bool inRange = true;
+        bool mono = true;
+        int prev = GoldminerFacing.ClawFrame(25.0);
+        for (int i = 0; i <= 130; i = i + 1) {
+            int f = GoldminerFacing.ClawFrame(25.0 + i);
+            if (f < 0 || f >= GoldminerFacing.ClawFrames) { inRange = false; }
+            if (f < prev) { mono = false; }
+            prev = f;
+        }
+        Ok(inRange, "摆角区间内帧号始终合法");
+        Ok(mono, "摆角越大帧号单调不减");
+        // 每一帧都有归属（不漏帧）
+        bool[] seen = new bool[GoldminerFacing.ClawFrames];
+        for (int i = 0; i <= 130; i = i + 1) {
+            seen[GoldminerFacing.ClawFrame(25.0 + i)] = true;
+        }
+        bool all = true;
+        for (int i = 0; i < GoldminerFacing.ClawFrames; i = i + 1) {
+            if (!seen[i]) { all = false; }
+        }
+        Ok(all, "12 帧在整个摆角区间都被用到");
+        // 源矩形：帧号 × 帧宽
+        Eq(GoldminerFacing.ClawSrcX(0), 0, "第 0 帧源 X = 0");
+        Eq(GoldminerFacing.ClawSrcX(6), 6 * GoldminerFacing.ClawFrameW,
+           "第 6 帧源 X = 6×帧宽");
+        Eq(GoldminerFacing.ClawSrcX(11), 11 * GoldminerFacing.ClawFrameW,
+           "第 11 帧源 X = 11×帧宽");
+    }
+
+    // ------------------ 20. 矿工朝向帧（纯函数） ------------------
+    static void TestMinerFacing() {
+        Eq(GoldminerFacing.MinerFrames, 2, "矿工两帧");
+        // 摆角 < 90 → 钩子在观者右侧 → 矿工朝右；> 90 → 钩子在观者左侧 → 朝左
+        Eq(GoldminerFacing.MinerFrame(25.0), GoldminerFacing.MinerFrameRight,
+           "钩子在观者右（25°）→ 朝右帧");
+        Eq(GoldminerFacing.MinerFrame(155.0), GoldminerFacing.MinerFrameLeft,
+           "钩子在观者左（155°）→ 朝左帧");
+        // 正下方死区：保持上一帧（返回 -1），免得每次过垂直线都翻脸
+        Eq(GoldminerFacing.MinerFrame(90.0), -1, "正下方是死区（保持上一帧）");
+        Eq(GoldminerFacing.MinerFrame(82.0), -1, "死区下界仍是保持");
+        Eq(GoldminerFacing.MinerFrame(98.0), -1, "死区上界仍是保持");
+        Eq(GoldminerFacing.MinerFrame(81.9), GoldminerFacing.MinerFrameRight,
+           "刚出死区（下界外）→ 朝右");
+        Eq(GoldminerFacing.MinerFrame(98.1), GoldminerFacing.MinerFrameLeft,
+           "刚出死区（上界外）→ 朝左");
+        // 源矩形
+        Eq(GoldminerFacing.MinerSrcX(0), 0, "矿工第 0 帧源 X = 0");
+        Eq(GoldminerFacing.MinerSrcX(1), GoldminerFacing.MinerFrameW,
+           "矿工第 1 帧源 X = 帧宽");
+        // 两帧不能是同一张（镜像过）
+        Ok(GoldminerFacing.MinerSrcX(0) != GoldminerFacing.MinerSrcX(1),
+           "矿工两帧源位置不同（镜像帧）");
+    }
+
+    // ------------------ 21. 钩头与绳不错位（几何） ------------------
+    static void TestClawGeometry() {
+        // 铰点与咬合点同列：绳头垂直对住爪尖，绳子不会歪
+        Eq(GoldminerFacing.ClawHingeX, GoldminerFacing.ClawPinchX,
+           "铰点与咬合点同列");
+        Ok(GoldminerFacing.ClawPinchY > GoldminerFacing.ClawHingeY,
+           "咬合点在铰点下方（钩子朝指向方向）");
+        Ok(GoldminerFacing.ClawPinchY < GoldminerFacing.ClawFrameH,
+           "咬合点在帧内");
+        // 缩放 = 显示高 / 原画高
+        EqD(GoldminerFacing.ClawScale(),
+            (double)GoldminerFacing.ClawDisplayH
+                / (double)GoldminerFacing.ClawArtH,
+            "爪子缩放 = 显示高 / 原画高");
+        // 铰点→咬合点的显示距离：绳头与爪尖之间留得下一段
+        double grip = (GoldminerFacing.ClawPinchY
+                       - GoldminerFacing.ClawHingeY)
+                    * GoldminerFacing.ClawScale();
+        Ok(grip > 10.0, "铰点→咬合点显示距离够长（绳子不会缩成一点）");
+        Ok(grip < 60.0, "铰点→咬合点显示距离不超钩子高度");
+    }
+
+    // ------------------ 22. 矿工朝向状态（世界） ------------------
+    static void TestMinerFacingState() {
+        World w = NewWorld(1);
+        Eq(w.minerFacing, GoldminerFacing.MinerFrameLeft, "开局矿工朝左");
+        w.angle = 60.0; w.Step(16);
+        Eq(w.minerFacing, GoldminerFacing.MinerFrameRight,
+           "钩子摆到观者右侧矿工朝右");
+        w.angle = 90.0; w.Step(16);
+        Eq(w.minerFacing, GoldminerFacing.MinerFrameRight,
+           "摆回正下方（死区）保持上一帧");
+        w.angle = 120.0; w.Step(16);
+        Eq(w.minerFacing, GoldminerFacing.MinerFrameLeft,
+           "钩子摆到观者左侧矿工朝左");
+        // 换关重置
+        w.StartLevel();
+        Eq(w.minerFacing, GoldminerFacing.MinerFrameLeft, "换关矿工朝向复位");
+    }
+
+    // ------------------ 23. 受力反馈（张力） ------------------
+    static void TestTension() {
+        World w = NewWorld(1);
+        Eq(w.tension, 0, "开局绳上没有受力");
+        Place(w, 0, Data.HOOK_X, 400);        // 小金块 重量 5
+        ThrowOnce(w, 400);
+        Eq(w.tension, 30, "抓到小金块张力 = 重量×6");
+        int t0 = w.tension;
+        w.Step(500);
+        Ok(w.tension < t0, "张力随收线卸掉");
+        Ok(w.tension >= 0, "张力不越界");
+        // 重物张力更高
+        World w2 = NewWorld(1);
+        Place(w2, 6, Data.HOOK_X, 400);       // 石头 重量 16
+        ThrowOnce(w2, 400);
+        Eq(w2.tension, 96, "抓到石头张力 = 16×6");
+        // 落地后张力归零（货卸了，绳松下来）
+        Land(w2, 900);
+        Eq(w2.tension, 0, "东西落地后张力归零");
+    }
+
+    // ------------------ 24. 咬合顿挫（伸收时序） ------------------
+    static void TestGrabStall() {
+        World w = NewWorld(1);
+        Place(w, 0, Data.HOOK_X, 400);        // 小金块
+        ThrowOnce(w, 400);
+        Ok(w.stallMs > 0, "抓中有咬合顿挫");
+        double len0 = w.clawLen;
+        w.Step(16);
+        EqD(w.clawLen, len0, "顿挫期爪子不收线（不出现速度突变）");
+        // 顿挫走完进入 spool：慢慢把绳鼓起来
+        int stall = w.stallMs;
+        for (int i = 0; i < stall / 16 + 6; i = i + 1) { w.Step(16); }
+        Ok(w.spoolMs > 0, "顿挫结束进入 spool 段");
+        Ok(w.clawLen < len0, "spool 段爪子开始收线");
+        // 石头（重物）顿挫更久
+        World w2 = NewWorld(1);
+        Place(w2, 6, Data.HOOK_X, 400);
+        ThrowOnce(w2, 400);
+        Ok(w2.stallMs > 200, "重物的咬合顿挫更久（吃力）");
+    }
+
+    // ------------------ 25. 抓取判定取最近 ------------------
+    static void TestGrabNearest() {
+        World w = NewWorld(1);
+        Item far = Place(w, 6, Data.HOOK_X + 30, 400);   // 石头 rad 34
+        Item near = Place(w, 0, Data.HOOK_X + 5, 400);   // 小金块 rad 24
+        Item hit = w.HitTest(Data.HOOK_X, 400);
+        Ok(hit == near, "同时命中时取离爪尖最近的那件");
+        Ok(!near.alive == false, "近的那件还在场上（只做判定不取走）");
+        // 判定半径口径不变：物品半径 + 14
+        World w2 = NewWorld(1);
+        Place(w2, 0, Data.HOOK_X + 37, 400);
+        Ok(w2.HitTest(Data.HOOK_X, 400) != null, "小金块 37px（半径 38 内）命中");
+        World w3 = NewWorld(1);
+        Place(w3, 0, Data.HOOK_X + 39, 400);
+        Ok(w3.HitTest(Data.HOOK_X, 400) == null, "小金块 39px（半径外）不命中");
+        World w4 = NewWorld(1);
+        Place(w4, 6, Data.HOOK_X + 47, 400);
+        Ok(w4.HitTest(Data.HOOK_X, 400) != null, "石头 47px（半径 48 内）命中");
+        World w5 = NewWorld(1);
+        Place(w5, 6, Data.HOOK_X + 49, 400);
+        Ok(w5.HitTest(Data.HOOK_X, 400) == null, "石头 49px（半径外）不命中");
+    }
+
+    // ------------------ 26. 皮肤与美术底板（去原生风） ------------------
+    static void TestSkinAndAssets() {
+        // 皮肤包必须与 exe 同级：UseSkin 找的是 exe/skins/<名>/skin.css
+        Ok(File.Exists(Assets.Find("skins/goldminer/skin.css")),
+           "皮肤包与 exe 同级（UseSkin 能找到）");
+        Ok(File.Exists(Assets.Find("skins/base.css")),
+           "控件基线 base.css 与 exe 同级");
+        Ok(File.Exists(Assets.Find("skins/dark/skin.css")),
+           "底座皮肤 dark 与 exe 同级");
+        Ok(File.Exists(Assets.Find("assets/skins/goldminer/skin.css")),
+           "皮肤包源文件在 assets 下");
+        // 精灵表尺寸必须与代码里的帧宽×帧数一致（烘焙与运行时不许漂）
+        int[] wh = new int[2];
+        Ok(Data.PngSize(Assets.Find("assets/claw_sheet.png"), wh),
+           "爪子方向精灵表可读");
+        Eq(wh[0], GoldminerFacing.ClawFrameW * GoldminerFacing.ClawFrames,
+           "爪子精灵表宽 = 帧宽 × 帧数");
+        Eq(wh[1], GoldminerFacing.ClawFrameH, "爪子精灵表高 = 帧高");
+        Ok(Data.PngSize(Assets.Find("assets/miner_sheet.png"), wh),
+           "矿工朝向精灵表可读");
+        Eq(wh[0], GoldminerFacing.MinerFrameW * GoldminerFacing.MinerFrames,
+           "矿工精灵表宽 = 帧宽 × 帧数");
+        Eq(wh[1], GoldminerFacing.MinerFrameH, "矿工精灵表高 = 帧高");
+        // 九宫格底板在位，且切角边长放得下
+        Ok(Data.PngSize(Assets.Find("assets/ui_hud_board.png"), wh),
+           "HUD 底板可读");
+        Eq(wh[0], 64, "HUD 底板宽 64");
+        Eq(wh[1], 64, "HUD 底板高 64");
+        Ok(GoldminerPaint.HudBoardBorder * 2 < wh[0],
+           "HUD 底板切角边长小于底板一半");
+        Ok(File.Exists(Assets.Find("assets/ui_bomb_board.png")),
+           "拆弹面板底板在位");
+        Ok(File.Exists(Assets.Find("assets/ui_trough.png")),
+           "进度条凹槽底板在位");
+        Ok(File.Exists(Assets.Find("assets/ui_gauge.png")),
+           "进度条填充底板在位");
+        // 老版 x2 一套与老版小图已经合并成一套
+        Ok(!File.Exists(Assets.Find("assets/gold_l2.png")), "老版 x2 素材已清空");
+        Ok(!File.Exists(Assets.Find("assets/result2.png")), "未引用的结果图已删");
+        Ok(!File.Exists(Assets.Find("assets/top2.png")), "旧顶栏横幅已换成底板");
+    }
+
+    // ------------------ 27. 色板与皮肤令牌对齐 ------------------
+    static void TestPaletteMatchesSkin() {
+        Eq(GoldminerPalette.Gold, unchecked((int)0xFFE8BE60), "色板黄金 #FFE8BE60");
+        Eq(GoldminerPalette.GoldDeep, unchecked((int)0xFFA87A2A),
+           "色板黄金深 #FFA87A2A");
+        Eq(GoldminerPalette.RockDark, unchecked((int)0xFF1A1613),
+           "色板岩层暗 #FF1A1613");
+        Eq(GoldminerPalette.TextPrimary, unchecked((int)0xFFF3E9D2),
+           "色板正文米白 #FFF3E9D2");
+        // 皮肤包的令牌必须与色板同值（两边各写各的就会走样）
+        string skinPath = Assets.Find("skins/goldminer/skin.css");
+        List<string> css = File.ReadAllLines(skinPath);
+        Ok(HasText(css, "--primary: #FFE8BE60;"), "皮肤主色 = 色板的黄金");
+        Ok(HasText(css, "--bg-primary: #FF1A1613;"), "皮肤底色 = 色板的岩层暗");
+        Ok(HasText(css, "--border-primary: #FFA87A2A;"),
+           "皮肤描边 = 色板的黄金深");
+        Ok(HasText(css, "--text-primary: #FFF3E9D2;"), "皮肤正文色 = 色板的米白");
+        // 结算页不许再写行内渐变/圆角（那会盖住皮肤）
+        string html = File.ReadAllText(Assets.Find("assets/scenes/result.html"));
+        Ok(html.IndexOf("linear-gradient") < 0, "结算页没有行内渐变");
+        Ok(html.IndexOf("border-radius") < 0, "结算页没有行内圆角");
+        Ok(html.IndexOf("class=\"cta\"") >= 0, "结算按钮走皮肤类 cta");
+    }
+
     // ------------------ 入口 ------------------
     static int Main(string[] args) {
         // 存档往返模式：给 tools/test.ps1 的 goldminer_SAVE_OK 段用。
@@ -749,6 +999,15 @@ public class GoldMinerTest {
         TestPopulate();
         TestSave();
         TestDataHelpers();
+        TestClawFacing();
+        TestMinerFacing();
+        TestClawGeometry();
+        TestMinerFacingState();
+        TestTension();
+        TestGrabStall();
+        TestGrabNearest();
+        TestSkinAndAssets();
+        TestPaletteMatchesSkin();
         Window.UnfreezeTick();
         Console.WriteLine("goldminer_test checks=" + Convert.ToString(checks)
             + " failures=" + Convert.ToString(failures));

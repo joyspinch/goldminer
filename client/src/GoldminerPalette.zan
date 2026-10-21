@@ -1,0 +1,46 @@
+// 黄金矿工 · 项目专属色板。
+//
+// 为什么单独一份色板：色调是这个游戏的身份——金矿的暖金、岩层的冷褐、
+// 警示的红。散落在各个文件里写死颜色，改一次配色要翻十个文件，而且
+// 皮肤包（client/assets/skins/goldminer/skin.css）里的令牌要跟这里的
+// 数值一一对得上，两边各写各的就会走样。
+//
+// 色值格式与画布一致：0xAARRGGBB（与 CDraw.Argb 同一套）。
+// CSS 侧写 #AARRGGBB，同一个数两处标注，注释里互指。
+public class GoldminerPalette {
+    // ---- 黄金：主强调色（关卡目标、金币、进度条、主按钮） ----
+    public const int Gold = unchecked((int)0xFFE8BE60);
+    public const int GoldDeep = unchecked((int)0xFFA87A2A);
+    public const int GoldEdge = unchecked((int)0xFFFFE29E);
+
+    // ---- 矿脉：矿石纹理与铜件（钩子、铆钉、进度槽边） ----
+    public const int Ore = unchecked((int)0xFF7A603A);
+    public const int OreBright = unchecked((int)0xFFA8884A);
+
+    // ---- 岩层：地表、地层、面板底板 ----
+    public const int Rock = unchecked((int)0xFF3A322C);
+    public const int RockLight = unchecked((int)0xFF54493E);
+    public const int RockDark = unchecked((int)0xFF1A1613);
+
+    // ---- 墨与幕：暗底、遮罩 ----
+    public const int Ink = unchecked((int)0xFF120F0C);
+    public const int Scrim = unchecked((int)0xD90A0C11);
+
+    // ---- 警示：拆弹、倒计时告急 ----
+    public const int Alert = unchecked((int)0xFFBC4830);
+    public const int AlertDeep = unchecked((int)0xFF782216);
+
+    // ---- 矿绳：卷筒到爪钩的钢索（受力时转成绷紧色） ----
+    public const int Rope = unchecked((int)0xFF4A3826);
+    public const int RopeLight = unchecked((int)0xFF806442);
+    public const int RopeStrained = unchecked((int)0xFF9A4A2A);
+
+    // ---- 矿灯：钩头顶端的绿灯（与美术图一致） ----
+    public const int LampGreen = unchecked((int)0xFF6EEB78);
+
+    // ---- 文字：全 CJK 可读的三档 ----
+    public const int TextPrimary = unchecked((int)0xFFF3E9D2);
+    public const int TextSecondary = unchecked((int)0xFFC8BBA0);
+    public const int TextDim = unchecked((int)0xFF9A8E7A);
+    public const int TextInk = unchecked((int)0xFF1A120C);
+}

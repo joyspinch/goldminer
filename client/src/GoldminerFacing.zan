@@ -1,0 +1,103 @@
+using System;
+
+// 朝向：摆角 → 精灵表帧号（纯函数，不碰画布、不碰世界状态）。
+//
+// 为什么必须离线烘焙
+// ------------------
+// 引擎运行时转不了图——`Canvas.BlitImage` 只有源矩形 (sx,sy,sw,sh)，
+// 没有旋转、没有水平翻转；`Gui.SpriteBatch` 的每精灵也只有
+// dx,dy,dw,dh,sx,sy,sw,sh,tint。所以"把钩子转个方向"只能在素材阶段
+// 烘好（client/tools/bake_assets.py），运行时只按角度取帧。
+//
+// 两张精灵表（尺寸口径见 client/ASSETS.md，改脚本必须同步改这里）
+// ------------------------------------------------------------------
+// claw_sheet.png —— 爪子 12 帧，覆盖摆角区间 [25,155]，步长 130/12。
+//   帧 6 正好是 90°（垂直向下 = 原图姿态）。每一帧的**铰点在帧内的位置
+//   相同**（120,43），所以绳尾永远接在同一个点上——绳子与钩头不错位。
+//   爪钳咬合线在帧内 y=129，运行时把咬合点对到"绳长"末端，判定点与
+//   画出来的爪尖才是同一个位置。
+//
+// miner_sheet.png —— 矿工 2 帧：0 = 原图（朝左）、1 = 水平镜像（朝右）。
+//   原图是正面视角，靠镜像翻面：镐在观者左侧，镜像后跑到观者右侧，
+//   朝向一眼可辨（与 crawler 的"不对称标记"同一手法）。
+//
+// 摆角约定：度，屏幕坐标（x 向右 = 0°，y 向下 = +90°），90 = 垂直向下。
+// 方向向量 = (cos a, sin a)：a < 90 时钩子在观者**右**边，a > 90 在**左**边。
+public class GoldminerFacing {
+    // ------------------ 爪子方向精灵表 ------------------
+    public const int ClawFrames = 12;
+    public const double ClawMinAngle = 25.0;
+    public const double ClawMaxAngle = 155.0;
+    // (155 - 25) / 12 = 10.833333...（用例里用公式反查，别只信这里）
+    public const double ClawAngleStep = 10.833333333333333;
+    public const int ClawFrameW = 240;   // 帧宽（源图像素）
+    public const int ClawFrameH = 151;   // 帧高（源图像素）
+    public const int ClawHingeX = 120;   // 铰点（绳头）在帧内的 x
+    public const int ClawHingeY = 43;    // 铰点（绳头）在帧内的 y
+    public const int ClawPinchX = 120;   // 爪钳咬合线在帧内的 x
+    public const int ClawPinchY = 129;   // 爪钳咬合线在帧内的 y
+    public const int ClawArtH = 110;     // 原画高度（源像素，铰点→爪尖 108）
+    public const int ClawDisplayH = 50;  // 运行时显示高度（逻辑像素）
+
+    // 运行时缩放：显示高度 / 原画高度。
+    public static double ClawScale() {
+        return (double)GoldminerFacing.ClawDisplayH
+             / (double)GoldminerFacing.ClawArtH;
+    }
+
+    // 摆角（度）→ 爪子方向帧号。
+    // 加半帧再整除 = 四舍五入到最近帧；区间外夹到端帧（摆角本来就被
+    // 世界限制在 [25,155]，这里只是兜底不让它越界取到别的帧）。
+    public static int ClawFrame(double angleDeg) {
+        double t = (angleDeg - GoldminerFacing.ClawMinAngle)
+                 / GoldminerFacing.ClawAngleStep;
+        int idx = (int)(t + 0.5);
+        if (idx < 0) { idx = 0; }
+        if (idx >= GoldminerFacing.ClawFrames) {
+            idx = GoldminerFacing.ClawFrames - 1;
+        }
+        return idx;
+    }
+
+    // 帧的源矩形左边界（源图像素，不是显示像素）。
+    public static int ClawSrcX(int frame) {
+        if (frame < 0) { frame = 0; }
+        if (frame >= GoldminerFacing.ClawFrames) {
+            frame = GoldminerFacing.ClawFrames - 1;
+        }
+        return frame * GoldminerFacing.ClawFrameW;
+    }
+
+    // ------------------ 矿工朝向精灵表 ------------------
+    public const int MinerFrames = 2;
+    public const int MinerFrameW = 190;   // 帧宽（源图像素）
+    public const int MinerFrameH = 272;   // 帧高（源图像素）
+    public const int MinerFrameLeft = 0;  // 原图：镐在观者左侧 → 朝左
+    public const int MinerFrameRight = 1; // 镜像：镐在观者右侧 → 朝右
+    // 正下方的死区：90° 附近不翻脸，免得每次过垂直线都闪一下。
+    public const double MinerDeadLo = 82.0;
+    public const double MinerDeadHi = 98.0;
+
+    // 摆角（度）→ 矿工朝向帧。
+    //   钩子在观者右（a < 死区下界）→ 朝右帧
+    //   钩子在观者左（a > 死区上界）→ 朝左帧
+    //   死区内      → -1，表示"保持上一帧"（由世界状态兜住）
+    public static int MinerFrame(double angleDeg) {
+        if (angleDeg < GoldminerFacing.MinerDeadLo) {
+            return GoldminerFacing.MinerFrameRight;
+        }
+        if (angleDeg > GoldminerFacing.MinerDeadHi) {
+            return GoldminerFacing.MinerFrameLeft;
+        }
+        return -1;
+    }
+
+    // 矿工帧的源矩形左边界（源图像素）。
+    public static int MinerSrcX(int frame) {
+        if (frame < 0) { frame = 0; }
+        if (frame >= GoldminerFacing.MinerFrames) {
+            frame = GoldminerFacing.MinerFrames - 1;
+        }
+        return frame * GoldminerFacing.MinerFrameW;
+    }
+}

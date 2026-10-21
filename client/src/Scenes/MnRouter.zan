@@ -1,0 +1,24 @@
+using System;
+using System.IO;
+using Gui;
+using Game.Foundation.Gui;
+
+// 黄金矿工的场景路由：首场景装载前把皮肤换上。
+//
+// 皮肤包（client/assets/skins/goldminer/skin.css）必须与 exe 同级：
+// build/goldminer/skins/goldminer/skin.css。Gui.Styling.Skin.Roots 查的
+// 是 exe 同级 skins/ 与 assets/skins/，构建脚本把皮肤包、公共包的
+// base.css 组件基线与 dark 底座一起拷过去（见 client/tools/build.ps1）。
+//
+// 顺序：先 UseSkin("dark") 铺底座，再 UseSkin("goldminer") 叠本游戏的
+// 皮肤——反了会被默认皮肤盖回去。App 在建好窗口之后才有皮肤可换，所以
+// 换肤必须落在主循环的 OnStart 钩子里（早于首场景的 HTML 装载）。
+public class MnRouter : SceneRouter {
+    public MnRouter(GuiHost host) : base(host) { }
+
+    public override void OnStart(GuiHost host) {
+        if (host.App() == null) { return; }
+        host.App().UseSkin("dark");
+        host.App().UseSkin("goldminer");
+    }
+}

@@ -14,14 +14,20 @@ public class MinerApp {
 
     // 纹理路径(assets 定位;null = 缺失,画矢量兜底)
     public string bgPath;
-    public string minerPath;
-    // 新美术(gpt-image-2 手绘,*2 文件名;旧资产名一律不动,缺则回退旧图)
-    public string campPath2;  // 天空带画面(0..SKY_H)
-    public string minePath2;  // 地层画面(SKY_H..H)
-    public string topPath2;  // 顶栏木牌横幅
-    public string glowPath2;  // 柔光晕(拆弹警示底光)
-    public string dynPath2;  // 炸药随身包图标(顶栏)
-    public string bombPath2;  // 拆弹弹体(拆弹面板)
+    // 朝向精灵表（离线烘焙，运行时按角度取帧）
+    public string clawSheetPath;   // assets/claw_sheet.png（12 方向帧）
+    public string minerSheetPath;  // assets/miner_sheet.png（左右两帧）
+    // 场景与物件
+    public string campPath;  // 天空带画面(0..SKY_H)
+    public string minePath;  // 地层画面(SKY_H..H)
+    public string glowPath;  // 柔光晕(拆弹警示底光)
+    public string dynPath;   // 炸药随身包图标(顶栏)
+    public string bombPath;  // 炸弹贴图(场上道具 + 拆弹弹体)
+    // 美术底板（九宫格自切，程序化烘出）
+    public string hudBoardPath;   // HUD 顶栏底板
+    public string bombBoardPath;  // 拆弹面板底板
+    public string troughPath;     // 进度条凹槽
+    public string gaugePath;      // 进度条填充(矿脉)
 
     // 计时
     public long lastFrameAt;
@@ -29,9 +35,8 @@ public class MinerApp {
     public int lastTenSecTick = -1;
     public int lastBoomSeq = 0;  // 已播声的爆炸事件序号
     // 素材实比(加载期从 PNG 头读出)
-    public int minerW = 120;
-    public int minerH = 200;
-    public int clawH = 66;
+    public int minerW = 95;
+    public int minerH = 136;
 
     public static MinerApp Create(GuiHost h) {
         MinerApp a = new MinerApp();
@@ -43,23 +48,22 @@ public class MinerApp {
         Data.HOOK_X = Data.W / 2;
         a.uiRng = Rng.Seed(20260904L);
         a.bgPath = MinerApp.FindAsset("assets/bg.jpg");
-        // 新美术优先(*2 文件名),旧资产名一律不动,缺则逐级回退旧图
-        a.campPath2 = MinerApp.FindAsset("assets/camp2.png");
-        a.minePath2 = MinerApp.FindAsset("assets/mine2.png");
-        a.topPath2 = MinerApp.FindAsset("assets/top2.png");
-        a.glowPath2 = MinerApp.FindAsset("assets/glow2.png");
-        a.dynPath2 = MinerApp.FindAsset("assets/dyn2.png");
-        a.bombPath2 = MinerApp.FindAsset("assets/bomb2.png");
-        a.minerPath = MinerApp.FindAsset("assets/miner2.png");
-        if (a.minerPath == null) {
-            a.minerPath = MinerApp.FindAsset("assets/miner.png");
-        }
+        a.campPath = MinerApp.FindAsset("assets/camp.png");
+        a.minePath = MinerApp.FindAsset("assets/mine.png");
+        a.clawSheetPath = MinerApp.FindAsset("assets/claw_sheet.png");
+        a.minerSheetPath = MinerApp.FindAsset("assets/miner_sheet.png");
+        a.glowPath = MinerApp.FindAsset("assets/glow.png");
+        a.dynPath = MinerApp.FindAsset("assets/dynamite.png");
+        a.bombPath = MinerApp.FindAsset("assets/bomb.png");
+        a.hudBoardPath = MinerApp.FindAsset("assets/ui_hud_board.png");
+        a.bombBoardPath = MinerApp.FindAsset("assets/ui_bomb_board.png");
+        a.troughPath = MinerApp.FindAsset("assets/ui_trough.png");
+        a.gaugePath = MinerApp.FindAsset("assets/ui_gauge.png");
+        // 物品贴图统一成 assets/<tex>.png 一套（老版小图与新版美术已合并，
+        // 运行时不再有"优先 x2、回退 x"的双份查找）。
         for (int i = 0; i < ItemDef.KIND_COUNT; i = i + 1) {
             ItemDef d = Data.DEFS[i];
-            d.assetPath = MinerApp.FindAsset("assets/" + d.tex + "2.png");
-            if (d.assetPath == null) {
-                d.assetPath = MinerApp.FindAsset("assets/" + d.tex + ".png");
-            }
+            d.assetPath = MinerApp.FindAsset("assets/" + d.tex + ".png");
         }
         a.w = new World();
         a.w.rng = Rng.Seed((int)(DateTime.UtcNow().ToUnixSeconds() & 2147483647));
@@ -84,14 +88,11 @@ public class MinerApp {
             }
         }
         // 矿工贴地站立:脚踩草地线,头顶让出兜底 HUD 顶栏带(此前
-        // 头盔被顶栏罩住)。
-        if (a.minerPath != null) {
-            int[] mw = new int[2];
-            if (MinerApp.PngSize(a.minerPath, mw)) {
-                a.minerH = Data.SKY_H - 54;
-                a.minerW = a.minerH * mw[0] / mw[1];
-            }
-        }
+        // 头盔被顶栏罩住)。显示尺寸按**单帧**算——精灵表是左右两帧
+        // 拼的,拿整张表的宽高比会把矿工拉宽一倍。
+        a.minerH = Data.SKY_H - 54;
+        a.minerW = a.minerH * GoldminerFacing.MinerFrameW
+                        / GoldminerFacing.MinerFrameH;
         return a;
     }
 
@@ -101,19 +102,10 @@ public class MinerApp {
         return p;
     }
 
-    // 读 PNG 头 IHDR 取尺寸(大端)。素材由构建管线统一生成,尺寸可靠;
-    // 解析失败返回 false,调用方退回正方形假设。
+    // 读 PNG 头 IHDR 取尺寸(大端) —— 见 Data.PngSize(用例要核对精灵表
+    // 尺寸,函数放在不带窗口依赖的 Data 里)。
     static bool PngSize(string path, int[] outWH) {
-        outWH[0] = 0; outWH[1] = 0;
-        if (path == null || !File.Exists(path)) { return false; }
-        byte[] b = File.ReadAllBytes(path);
-        if (b.Length < 24) { return false; }
-        if (b[0] != 137 || b[1] != 80 || b[2] != 78 || b[3] != 71) { return false; }
-        outWH[0] = (b[16] & 255) << 24 | (b[17] & 255) << 16
-                 | (b[18] & 255) << 8 | (b[19] & 255);
-        outWH[1] = (b[20] & 255) << 24 | (b[21] & 255) << 16
-                 | (b[22] & 255) << 8 | (b[23] & 255);
-        return outWH[0] > 0 && outWH[1] > 0;
+        return Data.PngSize(path, outWH);
     }
 
     // 全出血横带 cover：把 path 按目标带纵横比裁一块铺满 (dw,dh)，
@@ -204,10 +196,10 @@ public class MinerApp {
         }
         // 背景:天空带 + 地层带双横带 cover(接缝压在 SKY_H 草地线下,
         // 8px 交叠防震屏露缝);新图缺失回退旧整图,再缺回退渐变
-        if (this.campPath2 != null && this.minePath2 != null) {
-            MinerApp.BlitBand(rd, this.campPath2, ox, oy, w, Data.SKY_H + 8,
+        if (this.campPath != null && this.minePath != null) {
+            MinerApp.BlitBand(rd, this.campPath, ox, oy, w, Data.SKY_H + 8,
                               0.55);
-            MinerApp.BlitBand(rd, this.minePath2, ox, oy + Data.SKY_H - 8, w,
+            MinerApp.BlitBand(rd, this.minePath, ox, oy + Data.SKY_H - 8, w,
                               h - Data.SKY_H + 8, 0.5);
         } else if (this.bgPath != null) {
             CDraw.BlitImage(rd, this.bgPath, ox, oy, w, h);
@@ -240,16 +232,8 @@ public class MinerApp {
         }
         // 绳 + 爪 + 钩上物
         this.DrawClaw(ox, oy);
-        // 矿工(双脚踩草地线 SKY_H,头部完整在画内)
-        if (this.minerPath != null) {
-            int mw = this.minerW;
-            int mh = this.minerH;
-            CDraw.BlitImage(rd, this.minerPath, ox + Data.HOOK_X - mw / 2,
-                            oy + Data.SKY_H + 6 - mh, mw, mh);
-        } else {
-            CDraw.FillCircle(rd, ox + Data.HOOK_X, oy + Data.HOOK_Y - 40, 34,
-                             220, 160, 60, 255);
-        }
+        // 矿工(双脚踩草地线 SKY_H,头部完整在画内,朝向跟着钩子走)
+        this.DrawMiner(ox, oy);
         // 粒子
         for (int i = 0; i < wo.parts.Count; i = i + 1) {
             Particle p = wo.parts[i];
@@ -286,23 +270,39 @@ public class MinerApp {
         World wo = this.w;
         int pct = wo.Target() > 0 ? wo.gold * 100 / wo.Target() : 0;
         if (pct > 100) { pct = 100; }
-        // 顶栏:木牌横幅画打底(全宽 cover),轻压暗保文字对比;缺图回退
-        // 半透明黑条。文字信息两版一致。
-        if (this.topPath2 != null) {
-            MinerApp.BlitBand(rd, this.topPath2, ox, oy, Data.W, 48, 0.5);
-            CDraw.FillRect(rd, ox, oy, Data.W, 46, CDraw.Argb(110, 12, 14, 20));
+        // 顶栏:美术底板九宫格自切铺满全宽(岩层横梁 + 金边 + 铆钉),
+        // 不再是"半透明黑条 + 纯色块"。缺底板才回退纯色条。
+        if (this.hudBoardPath != null) {
+            GoldminerPaint.NineSlice(rd, this.hudBoardPath, ox, oy, Data.W, 46,
+                                     GoldminerPaint.HudBoardBorder);
         } else {
             CDraw.FillRect(rd, ox, oy, Data.W, 46, CDraw.Argb(215, 12, 14, 20));
         }
-        CDraw.FillRect(rd, ox, oy + 46, Data.W, 2, CDraw.Argb(255, 138, 111, 51));
-        CText.DrawShadow(rd, "第 " + Convert.ToString(wo.level) + " 关",
-                         ox + 16, oy + 10, 2, 232, 226, 212, 255);
-        CText.DrawShadow(rd, "$" + Convert.ToString(wo.gold) + "/"
-                         + Convert.ToString(wo.Target()),
-                         ox + 140, oy + 10, 2, 244, 208, 120, 255);
-        CDraw.FillRect(rd, ox + 360, oy + 17, 200, 12, CDraw.Argb(255, 40, 44, 56));
-        CDraw.FillRect(rd, ox + 360, oy + 19, 196 * pct / 100, 8,
-                       CDraw.Argb(255, 111, 170, 94));
+        // HUD 文字压在岩层上，用描边保证可读（不靠系统默认字色）
+        GoldminerPaint.TextOutlined(rd, "第 " + Convert.ToString(wo.level) + " 关",
+                                    ox + 16, oy + 10, 2,
+                                    243, 233, 210, 255, 18, 15, 12, 220);
+        GoldminerPaint.TextOutlined(rd, "$" + Convert.ToString(wo.gold) + "/"
+                                    + Convert.ToString(wo.Target()),
+                                    ox + 140, oy + 10, 2,
+                                    232, 190, 96, 255, 18, 15, 12, 220);
+        // 进度条:凹槽 + 矿脉条,两段都是九宫格底板
+        if (this.troughPath != null) {
+            GoldminerPaint.NineSlice(rd, this.troughPath, ox + 360, oy + 17,
+                                     200, 12, GoldminerPaint.TroughBorder);
+        } else {
+            CDraw.FillRect(rd, ox + 360, oy + 17, 200, 12, CDraw.Argb(255, 40, 44, 56));
+        }
+        if (pct > 0) {
+            if (this.gaugePath != null) {
+                GoldminerPaint.NineSlice(rd, this.gaugePath, ox + 362, oy + 19,
+                                         196 * pct / 100, 8,
+                                         GoldminerPaint.GaugeBorder);
+            } else {
+                CDraw.FillRect(rd, ox + 362, oy + 19, 196 * pct / 100, 8,
+                               CDraw.Argb(255, 232, 190, 96));
+            }
+        }
         // 右侧从右往左排(倒计时/连击/炸药),量宽定位互不重叠
         int totalCs = (wo.timeLeftMs + 5) / 10;
         int cs = totalCs % 100;
@@ -310,158 +310,170 @@ public class MinerApp {
         int xr = ox + Data.W - 16;
         string dtxt = "Q 炸药 x" + Convert.ToString(wo.dynamites);
         int dw = CText.Width(dtxt, 2);
-        if (this.dynPath2 != null) {
-            int isz = 26;  // 炸药随身包(161x200 实比)
-            CDraw.BlitImage(rd, this.dynPath2, xr - dw - 8 - isz * 161 / 200,
-                            oy + 8, isz * 161 / 200, isz);
+        if (this.dynPath != null) {
+            int isz = 26;  // 炸药随身包(97x120 实比)
+            CDraw.BlitImage(rd, this.dynPath, xr - dw - 8 - isz * 97 / 120,
+                            oy + 8, isz * 97 / 120, isz);
         }
-        CText.DrawShadow(rd, dtxt, xr - dw, oy + 10, 2, 200, 194, 174, 255);
+        GoldminerPaint.TextOutlined(rd, dtxt, xr - dw, oy + 10, 2,
+                                    200, 194, 174, 255, 18, 15, 12, 220);
         xr = xr - dw - 28;
         string ttxt = "剩余 " + Convert.ToString(totalCs / 100) + "." +
                       (cs < 10 ? "0" : "") + Convert.ToString(cs) + " 秒";
         int tw = CText.Width(ttxt, 2);
-        CText.DrawShadow(rd, ttxt, xr - tw, oy + 10, 2,
-                         urgent ? 250 : 232,
-                         urgent ? 120 : 226,
-                         urgent ? 96 : 212, 255);
+        GoldminerPaint.TextOutlined(rd, ttxt, xr - tw, oy + 10, 2,
+                                    urgent ? 250 : 232,
+                                    urgent ? 120 : 226,
+                                    urgent ? 96 : 212, 255, 18, 15, 12, 220);
         xr = xr - tw - 28;
         if (wo.combo.count >= 2) {
             string ctxt = "连击 x" + Convert.ToString(wo.combo.count);
             int cw = CText.Width(ctxt, 2);
-            CText.DrawShadow(rd, ctxt, xr - cw, oy + 10, 2, 240, 176, 80, 255);
+            GoldminerPaint.TextOutlined(rd, ctxt, xr - cw, oy + 10, 2,
+                                        240, 176, 80, 255, 18, 15, 12, 220);
         }
-        // 拆弹覆盖
+        // 拆弹覆盖:警示底板(九宫格) + 弹体 + 柔光晕
         if (wo.state == World.ST_BOMB) {
-            CDraw.FillRect(rd, ox + Data.W / 2 - 170, oy + 230, 340, 150,
-                           CDraw.Argb(205, 10, 12, 17));
-            CDraw.FillRect(rd, ox + Data.W / 2 - 170, oy + 230, 340, 3,
-                           CDraw.Argb(255, 192, 85, 63));
+            if (this.bombBoardPath != null) {
+                GoldminerPaint.NineSlice(rd, this.bombBoardPath,
+                                         ox + Data.W / 2 - 170, oy + 230,
+                                         340, 150,
+                                         GoldminerPaint.BombBoardBorder);
+            } else {
+                CDraw.FillRect(rd, ox + Data.W / 2 - 170, oy + 230, 340, 150,
+                               CDraw.Argb(205, 10, 12, 17));
+                CDraw.FillRect(rd, ox + Data.W / 2 - 170, oy + 230, 340, 3,
+                               CDraw.Argb(255, 192, 85, 63));
+            }
             int tx = ox + Data.W / 2;
-            if (this.bombPath2 != null) {
+            if (this.bombPath != null) {
                 // 弹体贴面板左侧,柔光晕按帧缩放脉动;文字整体右移让位
-                int bw = 72 * 277 / 340;  // 弹体(277x340 实比)
+                int bw = 72 * 96 / 118;  // 弹体(96x118 实比)
                 int bx = ox + Data.W / 2 - 156;
                 int by = oy + 269;
-                if (this.glowPath2 != null) {
+                if (this.glowPath != null) {
                     int g = 150 + (int)(Math.Sin(this.now / 110.0) * 12.0);
-                    CDraw.BlitImage(rd, this.glowPath2,
+                    CDraw.BlitImage(rd, this.glowPath,
                                     bx + bw / 2 - g / 2, by + 36 - g / 2, g, g);
                 }
-                CDraw.BlitImage(rd, this.bombPath2, bx, by, bw, 72);
+                CDraw.BlitImage(rd, this.bombPath, bx, by, bw, 72);
                 tx = tx + 30;
             }
-            CText.DrawCenteredShadow(rd, "疯狂点击! 拆除炸弹!",
-                                     tx, oy + 252, 3,
-                                     240, 176, 80, 255);
-            CText.DrawCenteredShadow(rd, Convert.ToString(wo.bombClicks) + "/"
-                                     + Convert.ToString(wo.bombNeed) + "    "
-                                     + Convert.ToString(wo.bombTimeLeft / 1000 + 1)
-                                     + " 秒",
-                                     tx, oy + 312, 2,
-                                     232, 226, 212, 255);
+            GoldminerPaint.TextCenteredOutlined(rd, "疯狂点击! 拆除炸弹!",
+                                                tx, oy + 252, 3,
+                                                240, 176, 80, 255, 18, 15, 12, 230);
+            GoldminerPaint.TextCenteredOutlined(rd,
+                                                Convert.ToString(wo.bombClicks) + "/"
+                                                + Convert.ToString(wo.bombNeed) + "    "
+                                                + Convert.ToString(wo.bombTimeLeft / 1000 + 1)
+                                                + " 秒",
+                                                tx, oy + 312, 2,
+                                                232, 226, 212, 255, 18, 15, 12, 230);
         }
         // 画布只保留定格的对局画面,不再叠画结算面板。
     }
 
-    // 爪与绳。画布没有旋转贴图,爪改为随摆角旋转的矢量三爪钩
-    // (钢毂 + 绿灯 + 三枚弯钳),铰点/绳头几何与纹理版同一约定。
+    // 爪与绳。爪子用**离线烘焙的方向精灵表**（client/tools/bake_assets.py
+    // → assets/claw_sheet.png，12 帧覆盖摆角区间 [25,155]）：引擎运行时
+    // 转不了图（Canvas.BlitImage 只有源矩形，没有旋转也没有水平翻转），
+    // 所以朝向只能在素材阶段烘好，运行时按摆角取帧
+    // （GoldminerFacing.ClawFrame，纯函数）。
+    //
+    // 绳头严格接在精灵表的**铰点**上：铰点 = 咬合点 - 指向方向·(帧内
+    // 咬合线到铰点的距离)。原先绳头接的是矢量爪的几何铰点（爪心-ch/2），
+    // 而画出来的钩子在那点**上方 22px**——绳子与钩子之间是断的（链条
+    // 错位）。现在绳头、矿灯、钩尖三者同一个像素点。
     void DrawClaw(int ox, int oy) {
         Canvas rd = this.c;
         World wo = this.w;
         double rad = wo.angle * Math.PI / 180.0;
         double ca = Math.Cos(rad);
         double sa = Math.Sin(rad);
+        // 咬合点 = 绳锚点 + 指向方向·绳长（与 World 的抓取判定同一个点）
         int cx = ox + Data.HOOK_X + (int)(ca * wo.clawLen);
         int cy = oy + Data.HOOK_Y + (int)(sa * wo.clawLen);
-        // 爪顶铰点(绿点)= 爪心 - 指向方向·ch/2。与伸出判定同一约定:
-        // 指向方向 (cosA,sinA),铰点始终在其反方向 ch/2 处。
-        int ch = this.clawH;
-        int h2 = ch / 2;
-        int ex = cx - (int)(ca * h2);
-        int ey = cy - (int)(sa * h2);
-        // 绳:绞车卷筒(即摆动圆心 HOOK_X,HOOK_Y)→ 爪铰点,一条绷直
-        // 的绳。摆动的爪绕圆心走圆弧,绳只有与爪同圆心才始终对准铰
-        // 点。但线头不能从圆心(机身内部)画起:起点裁剪到机身包围盒
-        // 的出射点,视觉上从抓钩机底部钻出。
-        int sx0 = ox + Data.HOOK_X;
-        int sy0 = oy + Data.HOOK_Y;
-        // 机身包围盒:矿工贴图立在 SKY_H 草地线上,机顶压在顶栏下缘
-        // (兜底 HUD 顶栏 46px)。
-        int bodyTop = oy + 45;
-        int bodyBottom = oy + Data.SKY_H + 6;
-        int bodyHalf = (this.minerW + 1) / 2;
-        int bodyLeft = ox + Data.HOOK_X - bodyHalf;
-        int bodyRight = ox + Data.HOOK_X + bodyHalf;
-        // 沿 (dx,dy)=圆心→铰点方向从圆心走参数 t∈[0,1],取与包围盒
-        // 的最后一个交点(最大 t)为线头;圆心在盒内,必有交点。
-        int dx = ex - sx0;
-        int dy = ey - sy0;
-        double tBest = 0.0;
-        if (dx != 0) {
-            double tx = dx > 0 ? (double)(bodyRight - sx0) / dx
-                               : (double)(bodyLeft - sx0) / dx;
-            if (tx > tBest) { tBest = tx; }
-        }
-        if (dy != 0) {
-            double ty = dy > 0 ? (double)(bodyBottom - sy0) / dy
-                               : (double)(bodyTop - sy0) / dy;
-            if (ty > tBest) { tBest = ty; }
-        }
-        if (tBest < 0.0) { tBest = 0.0; }
-        if (tBest > 1.0) { tBest = 1.0; }
-        int sx = sx0 + (int)(dx * tBest);
-        int sy = sy0 + (int)(dy * tBest);
-        // 两遍绳身:深棕粗底 + 浅棕细面,土色背景上可读
-        CDraw.Line(rd, sx, sy, ex, ey, 4, 74, 56, 38, 255);
-        CDraw.Line(rd, sx, sy, ex, ey, 2, 128, 100, 66, 255);
-        // 矢量爪:局部 (u,v) 坐标,v+ = 指向方向(90° 时向下),
-        // 世界 = 爪心 + u·(-sinA,cosA) + v·(cosA,sinA)。
-        // 三枚弯钳(左右对称 + 中央爪尖),再盖钢毂与绿灯。
-        int p1x = cx + (int)(-6 * -sa + -2 * ca);
-        int p1y = cy + (int)(-6 * ca + -2 * sa);
-        int p2x = cx + (int)(-17 * -sa + 8 * ca);
-        int p2y = cy + (int)(-17 * ca + 8 * sa);
-        int p3x = cx + (int)(-10 * -sa + 22 * ca);
-        int p3y = cy + (int)(-10 * ca + 22 * sa);
-        // 左钳两段
-        CDraw.Line(rd, p1x, p1y, p2x, p2y, 3, 156, 162, 176, 255);
-        CDraw.Line(rd, p2x, p2y, p3x, p3y, 3, 156, 162, 176, 255);
-        // 右钳(镜像 u)
-        int q1x = cx + (int)(6 * -sa + -2 * ca);
-        int q1y = cy + (int)(6 * ca + -2 * sa);
-        int q2x = cx + (int)(17 * -sa + 8 * ca);
-        int q2y = cy + (int)(17 * ca + 8 * sa);
-        int q3x = cx + (int)(10 * -sa + 22 * ca);
-        int q3y = cy + (int)(10 * ca + 22 * sa);
-        CDraw.Line(rd, q1x, q1y, q2x, q2y, 3, 156, 162, 176, 255);
-        CDraw.Line(rd, q2x, q2y, q3x, q3y, 3, 156, 162, 176, 255);
-        // 中央爪尖
-        int m1x = cx + (int)(0 * -sa + 2 * ca);
-        int m1y = cy + (int)(0 * ca + 2 * sa);
-        int m2x = cx + (int)(0 * -sa + 24 * ca);
-        int m2y = cy + (int)(0 * ca + 24 * sa);
-        CDraw.Line(rd, m1x, m1y, m2x, m2y, 5, 120, 126, 140, 255);
-        // 钢毂 + 亮边 + 绿灯(灯在铰点侧,即指向反方向)
-        CDraw.FillCircle(rd, cx, cy, 9, 70, 74, 86, 255);
-        CDraw.CircleStroke(rd, cx, cy, 9, 2, 150, 156, 170, 255);
-        int lx = cx - (int)(11 * ca);
-        int ly = cy - (int)(11 * sa);
-        CDraw.FillCircle(rd, lx, ly, 3, 110, 235, 120, 255);
-        // 钩上物挂在爪钳里:中心在爪心指向方向 0.58 爪高处,随摆角
-        // 转动(贴图保持直立)。
+        double sc = GoldminerFacing.ClawScale();
+        int grip = (int)((GoldminerFacing.ClawPinchY
+                          - GoldminerFacing.ClawHingeY) * sc);
+        int ex = cx - (int)(ca * grip);
+        int ey = cy - (int)(sa * grip);
+        // 钩上物：画在**爪钳咬合点**，且画在爪子**下面**——爪子咬住它，
+        // 不是它盖住爪子。贴图保持直立（运行时转不了图）。
         if (wo.hookedKind >= 0) {
             ItemDef d = Data.DEFS[wo.hookedKind];
             string tp = d.assetPath;
-            int jr = ch * 58 / 100;
-            int jx = cx + (int)(ca * jr);
-            int jy = cy + (int)(sa * jr);
             if (tp != null) {
-                CDraw.BlitImage(rd, tp, jx - d.texW / 2, jy - d.texH / 2,
+                CDraw.BlitImage(rd, tp, cx - d.texW / 2, cy - d.texH / 2,
                                 d.texW, d.texH);
             } else {
-                CDraw.FillCircle(rd, jx, jy, d.rad, 200, 170, 60, 255);
+                CDraw.FillCircle(rd, cx, cy, d.rad, 200, 170, 60, 255);
             }
         }
+        // 绳:从矿工胸口的卷筒(摆动圆心 HOOK_X,HOOK_Y)直拉到爪铰点。
+        // 起点不再裁到矿工包围盒边缘——那样绳子会从镐尖或袖口"钻出来"。
+        // 矿工是在绳子之后画的,矿工身上那一段自然被挡住,露出来的正好是
+        // 卷筒到爪子的那一截。
+        int sx0 = ox + Data.HOOK_X;
+        int sy0 = oy + Data.HOOK_Y;
+        // 两遍绳身:深色描边 + 亮芯。土色背景上不靠描边就看不见。
+        // 绳上挂着重物时(受力反馈)绳身绷粗、亮芯转成绷紧的锈红。
+        int ropeCol = GoldminerPaint.RopeTint(wo.tension);
+        int th = 3 + wo.tension / 34;
+        CDraw.Line(rd, sx0, sy0, ex, ey, th + 2, 30, 22, 16, 255);
+        CDraw.Line(rd, sx0, sy0, ex, ey, th, (ropeCol >> 16) & 255,
+                   (ropeCol >> 8) & 255, ropeCol & 255, 255);
+        // 爪子:按摆角取方向帧,整帧贴出(帧内铰点位置固定)。
+        if (this.clawSheetPath != null) {
+            string src = CDraw.BlitSource(rd, this.clawSheetPath);
+            if (src != null) {
+                int frame = GoldminerFacing.ClawFrame(wo.angle);
+                int dw = (int)(GoldminerFacing.ClawFrameW * sc);
+                int dh = (int)(GoldminerFacing.ClawFrameH * sc);
+                int dx2 = cx - (int)(GoldminerFacing.ClawPinchX * sc);
+                int dy2 = cy - (int)(GoldminerFacing.ClawPinchY * sc);
+                GoldminerPaint.Slice(rd, src, dx2, dy2, dw, dh,
+                                     GoldminerFacing.ClawSrcX(frame), 0,
+                                     GoldminerFacing.ClawFrameW,
+                                     GoldminerFacing.ClawFrameH);
+                return;
+            }
+        }
+        // 兜底：素材缺失时画一个简化的三爪钩（不追求美术，只保证可玩）。
+        CDraw.FillCircle(rd, ex, ey, 7, 70, 74, 86, 255);
+        CDraw.Line(rd, ex, ey, cx, cy, 5, 120, 126, 140, 255);
+        CDraw.Line(rd, ex - 6, ey, cx - 14, cy, 3, 156, 162, 176, 255);
+        CDraw.Line(rd, ex + 6, ey, cx + 14, cy, 3, 156, 162, 176, 255);
+    }
+
+    // 矿工：双脚踩草地线，朝向跟着钩子走（左右两帧，GoldminerFacing
+    // 取帧）。钩上挂着重物时矿工被拽得后仰——偏移量读 World.tension。
+    void DrawMiner(int ox, int oy) {
+        Canvas rd = this.c;
+        World wo = this.w;
+        if (this.minerSheetPath == null) {
+            CDraw.FillCircle(rd, ox + Data.HOOK_X, oy + Data.HOOK_Y - 40, 34,
+                             220, 160, 60, 255);
+            return;
+        }
+        string src = CDraw.BlitSource(rd, this.minerSheetPath);
+        if (src == null) {
+            CDraw.FillCircle(rd, ox + Data.HOOK_X, oy + Data.HOOK_Y - 40, 34,
+                             220, 160, 60, 255);
+            return;
+        }
+        // 受力后仰：钩子在右边就把矿工往左拽（反方向），重量越大越明显。
+        int rec = wo.tension / 12;
+        int rx = 0 - (int)(Math.Cos(wo.angle * Math.PI / 180.0) * rec);
+        int ry = rec / 2;
+        int mw = this.minerW;
+        int mh = this.minerH;
+        GoldminerPaint.Slice(rd, src,
+                             ox + Data.HOOK_X - mw / 2 + rx,
+                             oy + Data.SKY_H + 6 - mh + ry,
+                             mw, mh,
+                             GoldminerFacing.MinerSrcX(wo.minerFacing), 0,
+                             GoldminerFacing.MinerFrameW,
+                             GoldminerFacing.MinerFrameH);
     }
 
     void DrawQte(int ox, int oy) {
@@ -502,8 +514,8 @@ public class MinerApp {
         if (ProcessHost.Env("MINER_SIM") == "1") {
             return MinerApp.SimRun();
         }
-        SceneRouter router = SceneRouter.CreateFixed("黄金矿工", Data.W, Data.H,
-                                                     16);
+        SceneRouter router = new MnRouter(new GuiHost("黄金矿工", Data.W,
+                                                      Data.H, 16));
         MinerApp a = MinerApp.Create(router.Host());
         router.Register("play", new MnPlayScene(a));
         router.Register("over", new MnOverScene(a));

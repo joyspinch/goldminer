@@ -24,6 +24,16 @@ public class World {
     public double clawLen = 110.0;  // 绳长(设计单位)
     public double clawV = 0.0;  // 伸出/收回速度
     public int hookedKind = -1;  // 钩住的物品,-1 无
+    // 受力反馈：钩上物的重量压在绳上（0..100）。抓中时按重量拉满，
+    // 之后随收线慢慢卸掉——绳色/粗细与矿工后仰都读它。
+    public int tension = 0;
+    // 咬合后的"顿挫"(ms)：爪子咬住重物先停一下，再 spool 起来收线。
+    // 原来是从伸出速度直接跳到收线速度，抓中的一瞬间速度突变，像穿模。
+    public int stallMs = 0;
+    public int spoolMs = 0;
+    // 矿工朝向帧（0 朝左 / 1 朝右）：跟着钩子所在的一侧走，正下方死区
+    // 保持上一帧。取值规则在 GoldminerFacing.MinerFrame（纯函数）。
+    public int minerFacing = 0;
     // 绳锚点单一来源 = Data.HOOK_X/HOOK_Y（每帧随窗口延展更新）。
     // 物理绝不能私存开局副本：此前 hookX/hookY 固定 480/170，绘制却
     // 用新中心，"爪画在哪、判定在别处"——显示与抓取两套坐标。
@@ -111,6 +121,10 @@ public class World {
         this.lastSecondTick = false;
         this.bombClicks = 0;
         this.bombPulse = 0;
+        this.tension = 0;
+        this.stallMs = 0;
+        this.spoolMs = 0;
+        this.minerFacing = GoldminerFacing.MinerFrameLeft;
         this.parts.Clear();
         this.texts.Clear();
         this.Populate();
@@ -204,6 +218,15 @@ public class World {
         if (this.flashFrames > 0) { this.flashFrames = this.flashFrames - 1; }
         this.StepFx(dtMs);
 
+        // 受力卸力：绳上的张力随收线慢慢散掉（1.2 秒从 100 降到 0）。
+        if (this.tension > 0) {
+            this.tension = this.tension - dtMs / 12;
+            if (this.tension < 0) { this.tension = 0; }
+        }
+        // 矿工朝向：钩子在哪一侧，矿工就朝哪一侧（正下方死区保持上一帧）。
+        int want = GoldminerFacing.MinerFrame(this.angle);
+        if (want >= 0) { this.minerFacing = want; }
+
         // FEVER 衰减:3.2 秒没进账清零（结算界面保留连击显示，不清）
         if (this.state != World.ST_RESULT) {
             this.combo.Expire(NowMs());
@@ -285,6 +308,7 @@ public class World {
                 // 拆弹失败:爆炸,扣 100 金 + 震屏。爆点在爪尖(随摆角),
                 // 此前写死钩点正下方,斜角抓到时特效飘离爪子。
                 this.hookedKind = -1;
+                this.tension = 0;
                 this.state = World.ST_RETRACT;
                 this.BoomFx(this.TipX(), this.TipY(), 180);
                 this.boomSeq = this.boomSeq + 1;
@@ -296,6 +320,23 @@ public class World {
         }
     }
 
+    // 收线速度：咬合后的顿挫与 spool 都在这里（QTE 段与纯收线段共用
+    // 一条，省得两处各算一遍慢慢对不上）。少了这段，抓中那一帧的速度是
+    // 从"伸出"直接跳到"收线"，像穿模。
+    double RetractSpeed(double baseV, int dtMs) {
+        if (this.stallMs > 0) {
+            this.stallMs = this.stallMs - dtMs;
+            return 0.0;
+        }
+        if (this.spoolMs > 0) {
+            double v = baseV * (120.0 - (double)this.spoolMs) / 120.0;
+            this.spoolMs = this.spoolMs - dtMs;
+            if (this.spoolMs < 0) { this.spoolMs = 0; }
+            return v;
+        }
+        return baseV;
+    }
+
     void StepRetract(int dtMs, double dt) {
         ItemDef d = this.hookedKind >= 0 ? Data.DEFS[this.hookedKind] : null;
         int weight = d != null ? d.weight : 3;
@@ -303,9 +344,9 @@ public class World {
         // 拉好久。整体放慢一档、拉开轻重差距(重:轻 ≈ 1:3.4):
         // w=3  ≈ 452 px/s   w=8  ≈ 202   w=16 ≈ 67
         double baseV = 720.0 / (0.5 + weight * 0.62);
-        double v = baseV;
+        double v = this.RetractSpeed(baseV, dtMs);
         if (this.qteBoost > 0) {
-            v = v * 1.9;
+            v = v * 2.0;
             this.qteBoost = this.qteBoost - dtMs;
             if (this.qteBoost <= 0) { this.qteBoost = 0; }
         }
@@ -322,9 +363,9 @@ public class World {
         // 收线同时缓慢回收绳长(基础速度),QTE 命中给大加速
         ItemDef d = Data.DEFS[this.hookedKind];
         double baseV = 720.0 / (0.5 + d.weight * 0.62);
-        double v = baseV;
+        double v = this.RetractSpeed(baseV, dtMs);
         if (this.qteBoost > 0) {
-            v = v * 2.2;
+            v = v * 2.0;
             this.qteBoost = this.qteBoost - dtMs;
             if (this.qteBoost <= 0) { this.qteBoost = 0; }
         }
@@ -359,6 +400,7 @@ public class World {
             if (this.bombClicks >= this.bombNeed) {
                 // 拆弹成功:炸弹被安全拆除,奖励 +80
                 this.hookedKind = -1;
+                this.tension = 0;
                 this.state = World.ST_RETRACT;
                 this.AddGold(80, "拆除成功 +80", 120, 255, 140);
             }
@@ -383,6 +425,9 @@ public class World {
         // 炸掉钩上物,清连击
         this.combo.Break();
         this.hookedKind = -1;
+        this.tension = 0;
+        this.stallMs = 0;
+        this.spoolMs = 0;
         if (this.state == World.ST_QTE) { this.state = World.ST_RETRACT; }
         return true;
     }
@@ -392,6 +437,9 @@ public class World {
         int kind = this.hookedKind;
         this.hookedKind = -1;
         this.qteBoost = 0;
+        this.stallMs = 0;
+        this.spoolMs = 0;
+        this.tension = 0;
         this.state = World.ST_SWING;
         if (kind < 0) { return; }
         ItemDef d = Data.DEFS[kind];
@@ -497,6 +545,14 @@ public class World {
     // ------------------ 特效辅助 ------------------
     void OnHookFx(Item it) {
         ItemDef d = Data.DEFS[it.kind];
+        // 受力反馈：绳被拉紧（张力按重量拉满，随后随收线卸掉），矿工
+        // 被拽得后仰（表现层读 tension），抓中这一下还有一下闷震。
+        this.tension = d.weight * 6;
+        if (this.tension > 100) { this.tension = 100; }
+        // 咬合顿挫：先停 120+重量*10 毫秒，再 spool 120 毫秒把绳鼓起来。
+        this.stallMs = 120 + d.weight * 10;
+        this.spoolMs = 120;
+        this.Shake(d.weight, 30 + d.weight * 5);
         // 重物进入收线 QTE
         if (d.weight >= 9 && it.kind != 8 && it.kind != 9) {
             this.state = World.ST_QTE;
@@ -628,16 +684,27 @@ public class World {
         }
     }
 
-    Item HitTest(int x, int y) {
+    // 抓取判定：命中半径 = 物品半径 + 14（沿用旧口径），但**取离爪尖
+    // 最近的那一件**。原来按数组序返回第一个命中的——数组序是布场顺序，
+    // 与远近无关：两件东西同时压在爪尖上时，捡到的是"先摆进场的那件"，
+    // 看上去像随机吞物。玩家预期是"先碰到的那件"。
+    public Item HitTest(int x, int y) {
+        Item best = null;
+        int bestD = 0;
         for (int i = 0; i < this.items.Count; i = i + 1) {
             Item it = this.items[i];
             if (!it.alive) { continue; }
             ItemDef d = Data.DEFS[it.kind];
             int dx = it.x - x; int dy = it.y - y;
             int rr = d.rad + 14;
-            if (dx * dx + dy * dy <= rr * rr) { return it; }
+            int dd = dx * dx + dy * dy;
+            if (dd > rr * rr) { continue; }
+            if (best == null || dd < bestD) {
+                best = it;
+                bestD = dd;
+            }
         }
-        return null;
+        return best;
     }
 
     // ------------------ 存档 ------------------

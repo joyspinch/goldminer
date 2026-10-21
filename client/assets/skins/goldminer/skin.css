@@ -1,0 +1,180 @@
+/* skin.css — 黄金矿工的矿洞皮肤包。
+ *
+ * 位置：build/goldminer/skins/goldminer/skin.css（与 exe 同级），由
+ * client/assets/skins/goldminer/skin.css 拷贝而来；启动时
+ * `host.App().UseSkin("dark")` 之后 `UseSkin("goldminer")` 应用
+ * （顺序反了会被默认皮肤盖回去）。
+ *
+ * 令牌名照 packages/Zan.Gui/src/Gui/skins/base.css 抄，不自造：
+ * 颜色用 #AARRGGBB（与画布 0xAARRGGBB 同一套），度量用十进制。
+ * 配色语义：黄金（强调/金币）· 矿脉铜（描边/选中）· 岩层褐（面板底）
+ * · 米白（文字）。数值与 client/src/GoldminerPalette.zan 一一对应。
+ *
+ * 注意：这里只能写纯色/渐变令牌——引擎的样式表不解析 url() 背景图，
+ * 主题贴图一律走画布的美术底板 + 九宫格自切（client/src/GoldminerPaint.zan）。
+ */
+
+:root {
+  --name: "黄金矿工";
+  --base: dark;
+  --dark: 1;
+
+  /* 强调色：黄金 */
+  --primary: #FFE8BE60;
+  --primary-hover: #FFFFE29E;
+  --primary-pressed: #FFA87A2A;
+
+  /* 状态色 */
+  --success: #FF7FC98A;
+  --success-hover: #FF9BB6A4;
+  --success-pressed: #FF5E9E6B;
+  --warning: #FFE8C86A;
+  --warning-hover: #FFF6D489;
+  --warning-pressed: #FFA8813C;
+  --error: #FFE05A4E;
+  --error-hover: #FFF08A80;
+  --error-pressed: #FFB04038;
+  --info: #FF8FB4C8;
+  --info-hover: #FFAECBE0;
+  --info-pressed: #FF6B8FA5;
+
+  /* 文字：米白 / 旧纸 / 灰土 */
+  --text-primary: #FFF3E9D2;
+  --text-secondary: #FFC8BBA0;
+  --text-tertiary: #FF9A8E7A;
+  --text-disabled: #FF6E6558;
+  --text-inverse: #FF1A120C;
+
+  /* 表面：岩层 */
+  --bg-primary: #FF1A1613;
+  --bg-secondary: #FF2A231D;
+  --bg-tertiary: #FF3A322C;
+  --bg-hover: #FF4A4038;
+  --bg-active: #FF120F0C;
+  --bg-disabled: #FF241A14;
+
+  /* 描边：矿脉铜 */
+  --border-primary: #FFA87A2A;
+  --border-secondary: #FF6B4520;
+  --border-hover: #FFFFE29E;
+  --border-focus: #FFFFE29E;
+  --divider: #FF5A3A22;
+
+  --shadow-color: #B3000000;
+  --scrollbar: #FF5A3A22;
+  --tooltip-bg: #FF2A231D;
+  --tooltip-border: #FFA87A2A;
+  --tooltip-text: #FFF3E9D2;
+
+  /* 度量：矿工的小圆角，硬朗不圆润 */
+  --radius-small: 4;
+  --radius-medium: 6;
+  --radius-large: 8;
+  --border-radius-small: 4;
+  --border-radius-medium: 6;
+  --border-radius-large: 8;
+
+  --font-size-tiny: 12;
+  --font-size-small: 13;
+  --font-size-medium: 15;
+  --font-size-large: 18;
+  --font-size-huge: 30;
+}
+
+/* ---- 按钮：矿灯提手上的铜牌 ------------------------------------------- */
+button {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1 var(--border-primary);
+  border-radius: var(--radius-small);
+  font-size: var(--font-size-medium);
+  padding: 10 22;
+}
+button:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--border-hover);
+  color: var(--text-primary);
+}
+button:active {
+  background: var(--bg-active);
+  border-color: var(--border-hover);
+}
+button:focus {
+  border-color: var(--border-focus);
+}
+button:disabled {
+  background: var(--bg-disabled);
+  color: var(--text-disabled);
+  border: 1 var(--border-secondary);
+}
+
+/* 主行动按钮（结算页的"继续/重来"）：实心黄金。 */
+button.cta {
+  background: var(--primary);
+  color: var(--text-inverse);
+  border: 1 var(--primary-hover);
+  font-size: var(--font-size-large);
+  padding: 12 34;
+}
+button.cta:hover {
+  background: var(--primary-hover);
+  color: var(--text-inverse);
+  border-color: var(--primary-hover);
+}
+button.cta:active {
+  background: var(--primary-pressed);
+  color: var(--text-primary);
+  border-color: var(--primary);
+}
+
+/* ---- 文字 ------------------------------------------------------------- */
+label {
+  color: var(--text-primary);
+  font-size: var(--font-size-medium);
+}
+
+/* ---- 结算页 ----------------------------------------------------------- *
+ * 结算页原来用行内 style 画渐变按钮（行内样式会盖住皮肤），现在一律
+ * 走类名：颜色与间距由皮肤包给，版式由 HTML 骨架给。 */
+h1 {
+  color: var(--primary);
+  font-size: var(--font-size-huge);
+  margin: 0;
+}
+h2 {
+  color: var(--text-primary);
+  font-size: var(--font-size-large);
+  margin: 0;
+}
+p {
+  color: var(--text-secondary);
+  font-size: var(--font-size-medium);
+  margin: 0;
+}
+p.total {
+  color: var(--text-primary);
+  font-size: var(--font-size-large);
+}
+p.hint {
+  color: var(--text-tertiary);
+  font-size: var(--font-size-tiny);
+}
+
+/* 结算页的遮罩：只压暗，不画边框（面板是画布上的美术底板）。 */
+body.settlement {
+  background: #B80A0C11;
+  justify-content: center;
+}
+
+/* ---- 设置浮层的内容盒（SettingsOverlay 的 class="card"） ------------- */
+panel.card, card {
+  background: #E61A1613;
+  color: var(--text-primary);
+  border: 1 var(--border-primary);
+  border-radius: var(--radius-medium);
+  box-shadow: 0 8 22 var(--shadow-color);
+  padding: var(--padding-large);
+}
+panel.card::title, card::title {
+  color: var(--primary);
+}

@@ -40,7 +40,33 @@ $zargs += @('-o', $exe)
 & $Compiler @zargs
 if ($LASTEXITCODE -ne 0) { throw "zanc failed ($LASTEXITCODE)" }
 $assets = Join-Path $project 'assets'
+# 先清掉上一版残留（素材改过名时，老文件留着只会误导，也会撑大发布包），
+# 再整份拷过去。
+$outAssets = Join-Path $Output 'assets'
+if (Test-Path $outAssets) { Remove-Item $outAssets -Recurse -Force }
 if (Test-Path $assets) { Copy-Item $assets $Output -Recurse -Force }
+# 皮肤包必须与 exe 同级：build/goldminer/skins/goldminer/skin.css
+# （Gui.Styling.Skin.Roots 查的是 exe 同级 skins/ 与 assets/skins/）。
+# 一并拷公共包的两样东西：
+#   base.css  —— 控件基线（skin.css 里的 var(--radius-*) 等度量要靠它展开）
+#   dark/     —— 底座皮肤（UseSkin("dark") 先铺底，再 UseSkin("goldminer")）
+# 少了任何一个，UseSkin("goldminer") 之后的控件就退回默认外观。
+$skinSrc = Join-Path $assets 'skins/goldminer'
+if (Test-Path $skinSrc) {
+    $skinDst = Join-Path $Output 'skins/goldminer'
+    New-Item -ItemType Directory -Force -Path $skinDst | Out-Null
+    Copy-Item (Join-Path $skinSrc '*') $skinDst -Recurse -Force
+}
+$guiSkins = Join-Path $PackageProject 'packages/Zan.Gui/src/Gui/skins'
+if (Test-Path (Join-Path $guiSkins 'base.css')) {
+    New-Item -ItemType Directory -Force -Path (Join-Path $Output 'skins') | Out-Null
+    Copy-Item (Join-Path $guiSkins 'base.css') (Join-Path $Output 'skins/base.css') -Force
+}
+if (Test-Path (Join-Path $guiSkins 'dark')) {
+    $darkDst = Join-Path $Output 'skins/dark'
+    New-Item -ItemType Directory -Force -Path $darkDst | Out-Null
+    Copy-Item (Join-Path $guiSkins 'dark/*') $darkDst -Recurse -Force
+}
 Write-Host "Built $exe"
 
 # --- 玩法断言用例：单独编一个测试 exe ---
