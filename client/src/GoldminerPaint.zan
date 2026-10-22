@@ -2,15 +2,17 @@ using System;
 using Gui;
 using Game.Kit;
 
-// 画布上的"美术底板"绘制原语：九宫格自切 + 描边文字。
+// 黄金矿工的"项目专属"绘制件：九宫格切角常量 + 绳身颜色。
 //
-// 为什么自己切九宫格：引擎**没有 border-image**，CSS 那套九宫格不存在；
-// 贴图只能整幅贴，要拉伸出板子就得自己裁源矩形拼 9 块（角固定、边横/竖
-// 拉伸、中间拉伸）。做法照 PowderPaint.NineSlice / CardPaint.NineSlice。
+// 通用绘制原语**不再在这里实现**——九宫格切图归 Game.Kit.CKitSlice、
+// 裁源贴图归 Game.Kit.CDraw.BlitImageSrcKey、描边文字归 Game.Kit.CText。
+// 此前这一件事在本文件和另外 7 个项目各写一份，签名漂成 8 种（有的收内存
+// 键、有的收路径；切角语义、目标过窄时怎么退化各不相同），描边偏移更是
+// 1 设备像素 / 1 逻辑像素 / 随字号加粗三套并存。同一件事修一次 bug 要改
+// 8~11 处，所以统一进包，游戏实现层只调包。
 //
-// 底板由 client/tools/bake_assets.py 程序化烘出（不占 AI 素材预算，
-// 体积只有几百字节）：所有细节（切角、铆钉、警示边）都落在角上，中间
-// 保持平滑——中间会被横向拉到全屏宽，放噪声就成条纹了。
+// 本文件剩下的都是**这个游戏特有**的东西：切角边长要与 client/tools/
+// bake_assets.py 画板子的切角一致（用例按这里钉住），绳身颜色随张力变。
 public class GoldminerPaint {
     // 九宫格切角边长（**源图像素**）——与 client/tools/bake_assets.py
     // 画板子的切角一致，改那边必须同步改这里（用例按这里钉住）。
@@ -18,74 +20,6 @@ public class GoldminerPaint {
     public const int BombBoardBorder = 16;  // ui_bomb_board.png 64×64
     public const int TroughBorder = 4;      // ui_trough.png 48×16
     public const int GaugeBorder = 3;       // ui_gauge.png 48×14
-
-    // 九宫格底板：把 path 切成 9 块拼到目标矩形。border 是**源图像素**的
-    // 切角宽度（与 bake_assets.py 画板子的切角一致）。
-    public static void NineSlice(Canvas c, string path, int x, int y, int w, int h,
-                                 int border) {
-        if (path == null || path == "" || w <= 0 || h <= 0) { return; }
-        string key = CDraw.BlitSource(c, path);
-        if (key == null) { return; }
-        int sw = Canvas.ImageWidth(key);
-        int sh = Canvas.ImageHeight(key);
-        if (sw <= 0 || sh <= 0) { return; }
-        int b = border;
-        if (b * 2 >= sw) { b = sw / 2; }
-        if (b * 2 >= sh) { b = sh / 2; }
-        if (b < 1) { return; }
-        if (w < b * 2 || h < b * 2) {
-            // 目标比切角还窄：退化成整幅拉伸。
-            GoldminerPaint.Slice(c, key, x, y, w, h, 0, 0, sw, sh);
-            return;
-        }
-        int midW = sw - b * 2;
-        int midH = sh - b * 2;
-        // 四角。
-        GoldminerPaint.Slice(c, key, x, y, b, b, 0, 0, b, b);
-        GoldminerPaint.Slice(c, key, x + w - b, y, b, b, sw - b, 0, b, b);
-        GoldminerPaint.Slice(c, key, x, y + h - b, b, b, 0, sh - b, b, b);
-        GoldminerPaint.Slice(c, key, x + w - b, y + h - b, b, b, sw - b, sh - b, b, b);
-        // 四边。
-        GoldminerPaint.Slice(c, key, x + b, y, w - b * 2, b, b, 0, midW, b);
-        GoldminerPaint.Slice(c, key, x + b, y + h - b, w - b * 2, b, b, sh - b, midW, b);
-        GoldminerPaint.Slice(c, key, x, y + b, b, h - b * 2, 0, b, b, midH);
-        GoldminerPaint.Slice(c, key, x + w - b, y + b, b, h - b * 2, sw - b, b, b, midH);
-        // 中心。
-        GoldminerPaint.Slice(c, key, x + b, y + b, w - b * 2, h - b * 2, b, b, midW, midH);
-    }
-
-    // 一块切片：目标矩形在前、源矩形在后（源坐标是**原图像素**）。
-    public static void Slice(Canvas c, string key, int dx, int dy, int dw, int dh,
-                             int sx, int sy, int sw, int sh) {
-        if (dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0) { return; }
-        c.BlitImage(key, CDraw.MapX(dx + CDraw.originX),
-                    CDraw.MapY(dy + CDraw.originY),
-                    CDraw.MapW(dw), CDraw.MapW(dh), sx, sy, sw, sh);
-    }
-
-    // 描边文字：四向偏移画一圈描边色，再画正文。压在游戏画面上的 HUD
-    // 文字必须有描边——底图是亮岩层，没有描边就读不出来。
-    public static void TextOutlined(Canvas c, string text, int x, int y, int scale,
-                                    int cr, int cg, int cb, int ca,
-                                    int orr, int org, int orb, int oa) {
-        if (text == null || text == "") { return; }
-        int o = 1 + scale / 2;
-        CText.Draw(c, text, x - o, y, scale, orr, org, orb, oa);
-        CText.Draw(c, text, x + o, y, scale, orr, org, orb, oa);
-        CText.Draw(c, text, x, y - o, scale, orr, org, orb, oa);
-        CText.Draw(c, text, x, y + o, scale, orr, org, orb, oa);
-        CText.Draw(c, text, x, y, scale, cr, cg, cb, ca);
-    }
-
-    // 居中描边文字。
-    public static void TextCenteredOutlined(Canvas c, string text, int cx, int y,
-                                            int scale, int cr, int cg, int cb, int ca,
-                                            int orr, int org, int orb, int oa) {
-        if (text == null || text == "") { return; }
-        int w = CText.Width(text, scale);
-        GoldminerPaint.TextOutlined(c, text, cx - w / 2, y, scale,
-                                    cr, cg, cb, ca, orr, org, orb, oa);
-    }
 
     // 绳身颜色：不受力是麻绳浅色（150,125,88），受拉时转成绷紧的锈红
     // （206,110,58）。张力 0..100。绳另有一道深色描边（见调用处）。

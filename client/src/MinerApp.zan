@@ -273,29 +273,29 @@ public class MinerApp {
         // 顶栏:美术底板九宫格自切铺满全宽(岩层横梁 + 金边 + 铆钉),
         // 不再是"半透明黑条 + 纯色块"。缺底板才回退纯色条。
         if (this.hudBoardPath != null) {
-            GoldminerPaint.NineSlice(rd, this.hudBoardPath, ox, oy, Data.W, 46,
+            CKitSlice.NineSlice(rd, this.hudBoardPath, ox, oy, Data.W, 46,
                                      GoldminerPaint.HudBoardBorder);
         } else {
             CDraw.FillRect(rd, ox, oy, Data.W, 46, CDraw.Argb(215, 12, 14, 20));
         }
         // HUD 文字压在岩层上，用描边保证可读（不靠系统默认字色）
-        GoldminerPaint.TextOutlined(rd, "第 " + Convert.ToString(wo.level) + " 关",
+        CText.DrawOutlined(rd, "第 " + Convert.ToString(wo.level) + " 关",
                                     ox + 16, oy + 10, 2,
                                     243, 233, 210, 255, 18, 15, 12, 220);
-        GoldminerPaint.TextOutlined(rd, "$" + Convert.ToString(wo.gold) + "/"
+        CText.DrawOutlined(rd, "$" + Convert.ToString(wo.gold) + "/"
                                     + Convert.ToString(wo.Target()),
                                     ox + 140, oy + 10, 2,
                                     232, 190, 96, 255, 18, 15, 12, 220);
         // 进度条:凹槽 + 矿脉条,两段都是九宫格底板
         if (this.troughPath != null) {
-            GoldminerPaint.NineSlice(rd, this.troughPath, ox + 360, oy + 17,
+            CKitSlice.NineSlice(rd, this.troughPath, ox + 360, oy + 17,
                                      200, 12, GoldminerPaint.TroughBorder);
         } else {
             CDraw.FillRect(rd, ox + 360, oy + 17, 200, 12, CDraw.Argb(255, 40, 44, 56));
         }
         if (pct > 0) {
             if (this.gaugePath != null) {
-                GoldminerPaint.NineSlice(rd, this.gaugePath, ox + 362, oy + 19,
+                CKitSlice.NineSlice(rd, this.gaugePath, ox + 362, oy + 19,
                                          196 * pct / 100, 8,
                                          GoldminerPaint.GaugeBorder);
             } else {
@@ -315,13 +315,13 @@ public class MinerApp {
             CDraw.BlitImage(rd, this.dynPath, xr - dw - 8 - isz * 97 / 120,
                             oy + 8, isz * 97 / 120, isz);
         }
-        GoldminerPaint.TextOutlined(rd, dtxt, xr - dw, oy + 10, 2,
+        CText.DrawOutlined(rd, dtxt, xr - dw, oy + 10, 2,
                                     200, 194, 174, 255, 18, 15, 12, 220);
         xr = xr - dw - 28;
         string ttxt = "剩余 " + Convert.ToString(totalCs / 100) + "." +
                       (cs < 10 ? "0" : "") + Convert.ToString(cs) + " 秒";
         int tw = CText.Width(ttxt, 2);
-        GoldminerPaint.TextOutlined(rd, ttxt, xr - tw, oy + 10, 2,
+        CText.DrawOutlined(rd, ttxt, xr - tw, oy + 10, 2,
                                     urgent ? 250 : 232,
                                     urgent ? 120 : 226,
                                     urgent ? 96 : 212, 255, 18, 15, 12, 220);
@@ -329,13 +329,13 @@ public class MinerApp {
         if (wo.combo.count >= 2) {
             string ctxt = "连击 x" + Convert.ToString(wo.combo.count);
             int cw = CText.Width(ctxt, 2);
-            GoldminerPaint.TextOutlined(rd, ctxt, xr - cw, oy + 10, 2,
+            CText.DrawOutlined(rd, ctxt, xr - cw, oy + 10, 2,
                                         240, 176, 80, 255, 18, 15, 12, 220);
         }
         // 拆弹覆盖:警示底板(九宫格) + 弹体 + 柔光晕
         if (wo.state == World.ST_BOMB) {
             if (this.bombBoardPath != null) {
-                GoldminerPaint.NineSlice(rd, this.bombBoardPath,
+                CKitSlice.NineSlice(rd, this.bombBoardPath,
                                          ox + Data.W / 2 - 170, oy + 230,
                                          340, 150,
                                          GoldminerPaint.BombBoardBorder);
@@ -359,10 +359,10 @@ public class MinerApp {
                 CDraw.BlitImage(rd, this.bombPath, bx, by, bw, 72);
                 tx = tx + 30;
             }
-            GoldminerPaint.TextCenteredOutlined(rd, "疯狂点击! 拆除炸弹!",
+            CText.DrawCenteredOutlined(rd, "疯狂点击! 拆除炸弹!",
                                                 tx, oy + 252, 3,
                                                 240, 176, 80, 255, 18, 15, 12, 230);
-            GoldminerPaint.TextCenteredOutlined(rd,
+            CText.DrawCenteredOutlined(rd,
                                                 Convert.ToString(wo.bombClicks) + "/"
                                                 + Convert.ToString(wo.bombNeed) + "    "
                                                 + Convert.ToString(wo.bombTimeLeft / 1000 + 1)
@@ -431,7 +431,7 @@ public class MinerApp {
                 int dh = (int)(GoldminerFacing.ClawFrameH * sc);
                 int dx2 = cx - (int)(GoldminerFacing.ClawPinchX * sc);
                 int dy2 = cy - (int)(GoldminerFacing.ClawPinchY * sc);
-                GoldminerPaint.Slice(rd, src, dx2, dy2, dw, dh,
+                CDraw.BlitImageSrcKey(rd, src, dx2, dy2, dw, dh,
                                      GoldminerFacing.ClawSrcX(frame), 0,
                                      GoldminerFacing.ClawFrameW,
                                      GoldminerFacing.ClawFrameH);
@@ -467,7 +467,7 @@ public class MinerApp {
         int ry = rec / 2;
         int mw = this.minerW;
         int mh = this.minerH;
-        GoldminerPaint.Slice(rd, src,
+        CDraw.BlitImageSrcKey(rd, src,
                              ox + Data.HOOK_X - mw / 2 + rx,
                              oy + Data.SKY_H + 6 - mh + ry,
                              mw, mh,
