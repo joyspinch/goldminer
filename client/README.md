@@ -61,7 +61,7 @@ GuiHost 版（Game.Foundation.Gui）：窗口/事件/呈现由 packages/Zan.Gui/
 
     pwsh -File client/tools/build.ps1
 
-`--package-project` 默认指**主仓库** `D:\project\zan-lang`（只读）；要换用
+`--package-project` 默认指**主仓库** `$env:ZAN_HOME`（只读）；要换用
 别的包根就显式传 `-PackageProject <路径>`。**不要为公共包建 git worktree
 副本**——副本停在旧 commit 上，公共包一改就跟不上（曾经因此白干一轮）。
 

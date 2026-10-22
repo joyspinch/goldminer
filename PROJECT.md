@@ -15,7 +15,7 @@
 ## 编译
 
 ```powershell
-$env:ZAN_HOME = 'D:/project/zan-lang'   # 编译器与 stdlib 同源
+$env:ZAN_HOME = 'D:/path/to/zan-lang'   # 编译器与 stdlib 同源
 pwsh -File client/tools/build.ps1
 ```
 

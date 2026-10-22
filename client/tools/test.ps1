@@ -15,7 +15,7 @@ $ErrorActionPreference = 'Stop'
 $project = Split-Path -Parent $PSScriptRoot
 $repo = Split-Path -Parent $project
 . (Join-Path $PSScriptRoot 'zanc.ps1')
-if (-not $PackageProject) { if ($env:ZAN_HOME) { $PackageProject = $env:ZAN_HOME } else { $PackageProject = 'D:\project\zan-lang' } }
+if (-not $PackageProject) { if ($env:ZAN_HOME) { $PackageProject = $env:ZAN_HOME } else { throw '需要 -PackageProject 指向含 packages/ 的 zan-lang 仓库根，或设 $env:ZAN_HOME' } }
 if (-not $Compiler) { $Compiler = Resolve-ZanCompiler -PackageProject $PackageProject }
 $out = Join-Path $repo 'build/goldminer'
 & (Join-Path $PSScriptRoot 'build.ps1') -Compiler $Compiler -PackageProject $PackageProject -Output $out
